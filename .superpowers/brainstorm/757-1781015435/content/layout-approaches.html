@@ -1,0 +1,86 @@
+<h2>整体外壳改版：3 种实现方向</h2>
+<p class="subtitle">目标：把当前 React 应用改成 doc/web.html 的蓝色标题栏 + 左/中/右三栏 + 底部状态栏，并把会话、资产、性能/安全、Agent 管理都嵌入进去。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:220px;border:1px solid #dbe3ef;background:#fff;display:flex;flex-direction:column;font-size:11px;color:#334155">
+        <div style="height:28px;background:#2563eb;color:white;display:flex;align-items:center;padding:0 10px;gap:6px">DeepSeek V6.2.0 · NEXUS AI <span style="margin-left:auto">— □ ×</span></div>
+        <div style="flex:1;display:flex;min-height:0">
+          <div style="width:24%;border-right:1px solid #e5e7eb;padding:8px;background:white">
+            <div style="display:flex;gap:12px;border-bottom:1px solid #e5e7eb;padding-bottom:6px"><b style="color:#2563eb">会话</b><span>资产</span></div>
+            <div style="margin-top:14px;background:#2563eb;color:white;text-align:center;border-radius:4px;padding:5px">+ 新建对话</div>
+            <div style="margin-top:14px;color:#94a3b8">置顶空间</div>
+            <div style="margin-top:6px">📁 产品运营</div>
+            <div style="margin-top:10px;color:#94a3b8">活跃会话</div>
+            <div style="margin-top:6px;background:#eff6ff;border-left:2px solid #2563eb;padding:6px">💬 竞品销量异动分析</div>
+          </div>
+          <div style="width:60%;padding:14px;background:white;display:flex;flex-direction:column">
+            <div style="background:#f7f8fa;border-radius:8px;padding:12px;flex:1">建议：建议主攻 899元以上...<br><br><div style="background:#1f2937;color:white;border-radius:4px;padding:6px">_> spider_probe_server.py</div><div style="margin-top:8px;border:1px solid #86efac;background:#f0fdf4;padding:8px;border-radius:4px;color:#059669">✓ 任务执行完毕</div></div>
+            <div style="border-top:1px solid #e5e7eb;margin-top:10px;padding-top:8px">📎 🖼 🎙 📡 ▣ <div style="margin-top:6px;display:flex;gap:6px"><div style="border:1px solid #e5e7eb;border-radius:4px;padding:6px;flex:1;color:#94a3b8">输入您的问题...</div><div style="background:#2563eb;color:white;border-radius:4px;padding:6px 10px">→</div></div></div>
+          </div>
+          <div style="width:16%;border-left:1px solid #e5e7eb;padding:8px;background:white">
+            <div style="display:flex;gap:10px;border-bottom:1px solid #e5e7eb;padding-bottom:6px"><b style="color:#2563eb">性能</b><span>安全</span><span>Agent</span></div>
+            <div style="margin-top:14px;font-weight:600">硬件监控</div>
+            <div style="margin-top:10px">GPU显存 <span style="float:right">52%</span><div style="height:7px;background:#e5e7eb;border-radius:9px"><div style="width:52%;height:7px;background:#2563eb;border-radius:9px"></div></div></div>
+          </div>
+        </div>
+        <div style="height:24px;border-top:1px solid #e5e7eb;padding:4px 10px">⚡ DeepSeek API | API Key已配置 <span style="float:right">导出日志 · PING 15ms</span></div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. 原型优先重构（推荐）</h3>
+      <p>重写 LayoutShell 为原型外壳；会话主区继续使用现有 Redux 数据，但按原型拆成左/中/右嵌入组件。视觉最一致，风险可控。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:220px;border:1px solid #dbe3ef;background:#fff;display:flex;flex-direction:column;font-size:11px;color:#334155">
+        <div style="height:28px;background:#2563eb;color:white;padding:7px 10px">DeepSeek V6.2.0 · NEXUS AI</div>
+        <div style="flex:1;display:flex">
+          <div style="width:18%;background:#111827;color:white;padding:8px">旧导航<br><br>💬 会话<br>📁 资产<br>🤖 Agent<br>📊 监控</div>
+          <div style="width:58%;padding:12px;background:#f7f8fa">现有页面保持为路由 Outlet</div>
+          <div style="width:24%;background:#111827;color:white;padding:8px">现有 MonitorPanel</div>
+        </div>
+        <div style="height:24px;border-top:1px solid #e5e7eb;padding:4px 10px">状态栏</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. 包壳式适配</h3>
+      <p>只改顶部/底部/比例，把旧页面塞进中间。改动少，但很难达到原型图的轻色三栏体验，旧深色侧栏会保留。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="height:220px;border:1px solid #dbe3ef;background:#fff;display:flex;flex-direction:column;font-size:11px;color:#334155">
+        <div style="height:28px;background:#2563eb;color:white;padding:7px 10px">DeepSeek V6.2.0 · NEXUS AI</div>
+        <div style="flex:1;display:grid;place-items:center;background:#f7f8fa;color:#64748b">静态 HTML 完整还原<br>暂不接入现有 Redux/路由</div>
+        <div style="height:24px;border-top:1px solid #e5e7eb;padding:4px 10px">状态栏</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. 静态像素还原</h3>
+      <p>先做最像原型的静态界面，后续再接交互。最快看到效果，但会牺牲当前模块功能，不适合“全模块嵌入”。</p>
+    </div>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <h4>推荐 A 的原因</h4>
+    <ul>
+      <li>最符合“整个应用外壳改成原型图”。</li>
+      <li>保留会话、资产、监控、安全、Agent 管理的数据和交互。</li>
+      <li>可以把 Agent 管理加到右侧“安全栏/右栏 tab”中。</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>需要注意</h4>
+    <ul>
+      <li>会触及 LayoutShell、ConversationUI、AssetPanel、MonitorPanel、AgentManagerUI、测试。</li>
+      <li>现有深色主题需要降级为后续增强，先匹配浅色原型。</li>
+    </ul>
+  </div>
+</div>
