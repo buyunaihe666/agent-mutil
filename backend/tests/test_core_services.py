@@ -223,7 +223,7 @@ async def test_rollback_version(ag_store):
 
 def test_agent_templates_exist(ag_store):
     templates = ag_store.get_templates()
-    assert len(templates) >= 4
+    assert len(templates) >= 5
     categories = set(t.category for t in templates)
     assert "分析" in categories
 
@@ -365,12 +365,12 @@ def t_registry():
 
 
 def test_default_tools_registered(t_registry):
-    assert t_registry.tool_count >= 5
+    assert t_registry.tool_count >= 7
 
 
 def test_list_tools(t_registry):
     tools = t_registry.list_tools()
-    assert len(tools) >= 5
+    assert len(tools) >= 7
 
 
 def test_list_tools_by_category(t_registry):
@@ -420,6 +420,20 @@ async def test_execute_nonexistent_tool(t_registry):
     result = await t_registry.execute_tool("nonexistent")
     assert result.success is False
     assert "not found" in result.error
+
+
+@pytest.mark.asyncio
+async def test_code_execution_audit_tool(t_registry):
+    result = await t_registry.execute_tool("audit_code", code="eval('malicious')")
+    assert result.success is True
+    assert result.data is not None
+    assert "audit_summary" in result.data
+
+
+def test_audit_tool_category(t_registry):
+    tools = t_registry.list_tools(category=ToolCategory.CODE_EXECUTION_AUDIT)
+    assert len(tools) == 1
+    assert tools[0].name == "code_execution_audit"
 
 
 # --- Sandbox Manager Tests (M7) ---

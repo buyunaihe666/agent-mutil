@@ -5,6 +5,7 @@ export interface AgentData {
   id: string;
   name: string;
   description?: string;
+  system_prompt?: string;
   avatar_emoji?: string;
   permission_level: number;
   is_preset: boolean;

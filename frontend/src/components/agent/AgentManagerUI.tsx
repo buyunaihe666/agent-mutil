@@ -126,6 +126,11 @@ function AgentCard({
           <span className="text-[10px] text-gray-400">+{(agent.tools ?? []).length - 2}</span>
         )}
       </div>
+      {!isCompact && agent.system_prompt && (
+        <div className="mt-2 text-xs text-muted-foreground line-clamp-2">
+          {agent.system_prompt}
+        </div>
+      )}
       <div className={cx("flex justify-between text-muted-foreground", isCompact ? "mt-1.5 text-[10px]" : "mt-3 text-xs")}>
         <span>{isCompact ? agent.default_model : `Model: ${agent.default_model}`}</span>
         <span>{isCompact ? `L${agent.permission_level} · v${agent.version_count}` : `Level: L${agent.permission_level} · v${agent.version_count}`}</span>
@@ -146,7 +151,7 @@ function AgentEditor({
 }) {
   const [name, setName] = useState(agent?.name ?? "");
   const [description, setDescription] = useState(agent?.description ?? "");
-  const [systemPrompt, setSystemPrompt] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState(agent?.system_prompt ?? "");
   const [model, setModel] = useState(agent?.default_model ?? "deepseek-chat");
   const [level, setLevel] = useState(agent?.permission_level ?? 1);
   const [temperature, setTemperature] = useState(agent?.temperature ?? 0.7);
@@ -259,6 +264,7 @@ function AgentEditor({
             onSave({
               name,
               description,
+              system_prompt: systemPrompt,
               default_model: model,
               permission_level: level,
               temperature,
@@ -544,6 +550,11 @@ const MOCK_AGENTS: AgentData[] = [
     name: "数字主管",
     description: "任务拆解与分配协调者",
     avatar_emoji: "🎯",
+    system_prompt:
+      "你是 NEXUS AI 平台的数字主管（Orchestrator），负责统筹协调多个专业 Agent 协同完成复杂任务。\n\n" +
+      "## 核心职责\n- 任务分析：理解用户意图，识别隐含需求\n- 任务拆解：将复杂任务分解为可执行的子任务\n- Agent 匹配：根据任务类型选择最合适的执行 Agent\n- 进度管理：跟踪子任务状态，处理异常和阻塞\n- 结果聚合：整合各 Agent 输出为统一回复\n\n" +
+      "## 工作流程\n1. 需求分析 → 2. 任务分解（数据层/分析层/产出层）→ 3. Agent 调度 → 4. 质量控制 → 5. 统一输出\n\n" +
+      "## 约束\n- 不直接执行代码、查询数据库或写文件\n- 不编造数据或虚构执行结果",
     permission_level: 4,
     is_preset: true,
     is_active: true,
@@ -558,6 +569,11 @@ const MOCK_AGENTS: AgentData[] = [
     name: "风控顾问",
     description: "安全审计与合规检查",
     avatar_emoji: "🛡️",
+    system_prompt:
+      "你是 NEXUS AI 平台的风控顾问，负责对代码执行、数据访问和操作行为进行安全审计与合规检查。\n\n" +
+      "## 审计范围\n- 代码安全：注入攻击、命令执行、文件越权\n- 数据合规：越权查询、敏感数据脱敏\n- 操作审计：未授权写入、文件修改、外部通信\n\n" +
+      "## 风险评级\n- 🔴 严重：立即阻断 | 🟠 高危：阻止执行 | 🟡 中危：建议修改 | 🔵 低危：建议优化\n\n" +
+      "## 约束\n- 只审计不修改\n- 发现敏感数据立即脱敏\n- 参照 OWASP Top 10 / CWE Top 25 / CVSS 3.1",
     permission_level: 3,
     is_preset: true,
     is_active: true,
@@ -572,6 +588,11 @@ const MOCK_AGENTS: AgentData[] = [
     name: "数据专家",
     description: "数据处理与分析",
     avatar_emoji: "📊",
+    system_prompt:
+      "你是 NEXUS AI 平台的数据专家，精通 SQL 数据分析、Python 统计计算和数据可视化。\n\n" +
+      "## 核心技能\n- SQL：复杂查询、窗口函数、多表 JOIN\n- Python：pandas/numpy/scipy 数据处理和统计\n- 可视化：matplotlib 图表生成\n- 信息获取：web_search 外部数据上下文\n\n" +
+      "## 工作流程\n1. 需求澄清 → 2. 数据探查（database_query）→ 3. 数据清洗 → 4. 分析计算 → 5. 可视化 → 6. 结论输出\n\n" +
+      "## 约束\n- 只读 SQL（SELECT + LIMIT）\n- 敏感数据脱敏\n- 区分相关性与因果性",
     permission_level: 2,
     is_preset: true,
     is_active: true,
@@ -590,7 +611,11 @@ const MOCK_TEMPLATES: AgentTemplate[] = [
     description: "分析市场趋势、竞品动态、行业报告",
     category: "分析",
     avatar_emoji: "📈",
-    system_prompt: "You are a market analyst.",
+    system_prompt:
+      "你是一位资深市场分析专家，擅长从海量信息中提炼关键洞察。\n\n" +
+      "## 工作方法\n1. 明确分析范围 → 2. web_search 收集最新市场数据 → 3. file_read 深入分析数据文件 → 4. code_execution 数据处理和可视化 → 5. 交叉验证 → 6. 提炼洞察\n\n" +
+      "## 输出格式\n- 执行摘要（3-5条核心发现）\n- 市场概况（规模、增长率、主要参与者）\n- 趋势分析\n- 竞品格局（SWOT 或对比表格）\n- 机会与风险\n\n" +
+      "## 约束\n- 每个结论必须有数据支撑，标注信息来源\n- 区分事实与判断，不确定处标注置信度",
     tools: ["web_search", "file_read", "code_execution"],
   },
   {
@@ -599,7 +624,12 @@ const MOCK_TEMPLATES: AgentTemplate[] = [
     description: "审查代码质量、安全漏洞、性能优化",
     category: "开发",
     avatar_emoji: "🔍",
-    system_prompt: "You are a code reviewer.",
+    system_prompt:
+      "你是一位资深代码审查专家，审查严格但公正，每次给出具体可操作的改进建议。\n\n" +
+      "## 审查维度\n1. 安全性：SQL注入、XSS、敏感信息泄露\n2. 正确性：边界条件、空值检查、异常处理\n3. 性能：N+1查询、内存泄漏、阻塞I/O\n4. 可维护性：命名规范、函数复杂度、代码重复\n\n" +
+      "## 问题分级\n🔴严重 / 🟠重要 / 🟡一般 / 🔵建议\n\n" +
+      "## 输出格式\n- 审查概要 → 问题清单（含Before/After代码示例）→ 代码亮点 → 整体评分（A/B/C/D/F）\n\n" +
+      "## 参考标准\nPEP 8 / SOLID / OWASP Top 10",
     tools: ["code_execution", "file_read"],
   },
   {
@@ -608,7 +638,11 @@ const MOCK_TEMPLATES: AgentTemplate[] = [
     description: "撰写技术文档、报告、方案",
     category: "内容",
     avatar_emoji: "✍️",
-    system_prompt: "You are a technical writer.",
+    system_prompt:
+      "你是一位专业的技术文档撰写专家，精通将复杂技术概念转化为清晰、准确、结构化的文档。\n\n" +
+      "## 文档类型\n- 技术文档：API文档、架构设计、运维手册、README\n- 方案报告：项目方案、技术选型、风险评估\n- 知识库：FAQ、最佳实践、故障排查\n\n" +
+      "## 工作方法\n1. 受众分析 → 2. 结构规划 → 3. 内容撰写 → 4. 质量检查 → 5. file_write 输出\n\n" +
+      "## 写作原则\n- 一个段落只讲一个主题\n- 专业术语首次出现时解释\n- 用具体例子说明抽象概念\n- 保持中文简洁准确",
     tools: ["file_read", "file_write"],
   },
   {
@@ -617,8 +651,26 @@ const MOCK_TEMPLATES: AgentTemplate[] = [
     description: "SQL查询、数据清洗、统计分析、图表生成",
     category: "分析",
     avatar_emoji: "📊",
-    system_prompt: "You are a data analyst.",
+    system_prompt:
+      "你是一个数据分析师，擅长SQL查询、数据清洗、统计分析和可视化。请为你的每个分析结论提供数据支持。\n\n" +
+      "## 工作方法\n1. 明确分析目标和关键指标\n2. 通过 database_query 探查数据结构\n3. 通过 code_execution 进行数据处理和统计计算\n4. 生成可视化图表辅助理解\n5. 将分析结果翻译为业务洞察\n\n" +
+      "## 输出格式\n- 分析摘要（3行以内的核心结论）\n- 数据说明（来源、样本量、时间范围）\n- 关键发现（按重要性排序，每个发现附数据支撑）\n- 行动建议\n- 局限与假设\n\n" +
+      "## 约束\n- SQL查询只读（SELECT + LIMIT）\n- 敏感数据脱敏处理\n- 区分相关性与因果性",
     tools: ["database_query", "code_execution", "file_read"],
+  },
+  {
+    id: "tp5",
+    name: "安全审计",
+    description: "系统安全审计、漏洞扫描、合规检查",
+    category: "安全",
+    avatar_emoji: "🛡️",
+    system_prompt:
+      "你是一个安全审计专家，负责检查系统的安全性、合规性和潜在漏洞。请谨慎、严谨地评估每一项风险。\n\n" +
+      "## 审计范围\n- 代码安全：注入漏洞、不安全依赖、硬编码密钥\n- 数据安全：访问控制、加密存储、日志审计\n- 合规检查：个保法/GDPR、PCI-DSS、SOC2\n\n" +
+      "## 工作方法\n1. 明确审计范围和目标标准\n2. 通过 file_read 审查配置和代码文件\n3. 通过 code_execution_audit 进行代码安全分析\n4. 通过 database_query 检查数据访问日志\n5. 使用 CVSS 3.1 标准评估漏洞严重程度\n6. 形成包含修复优先级的审计报告\n\n" +
+      "## 输出格式\n- 审计概要（范围、日期、方法）\n- 执行摘要（面向管理层）\n- 漏洞详表（按 CVSS 评分排列）\n- 风险矩阵\n- 修复路线图（紧急/短期/长期）\n\n" +
+      "## 约束\n- 只审计不修改\n- 发现敏感数据立即脱敏\n- 所有操作可追溯",
+    tools: ["code_execution_audit", "file_read", "database_query"],
   },
 ];
 
@@ -720,6 +772,7 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
         id: `custom-${Date.now()}`,
         name: data.name ?? "New Agent",
         description: data.description,
+        system_prompt: data.system_prompt ?? "",
         avatar_emoji: "🤖",
         permission_level: data.permission_level ?? 1,
         is_preset: false,
@@ -748,6 +801,7 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
       id: `custom-${Date.now()}`,
       name: tpl.name,
       description: tpl.description,
+      system_prompt: tpl.system_prompt,
       avatar_emoji: tpl.avatar_emoji,
       permission_level: 1,
       is_preset: false,
