@@ -1,4 +1,4 @@
-# NEXUS AI
+# mutil AI
 
 <p align="center">
   <strong>🤖 多 Agent AI 协作平台 | Multi-Agent AI Collaboration Platform</strong>
