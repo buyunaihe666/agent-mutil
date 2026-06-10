@@ -16,7 +16,7 @@
 
 ## 📖 简介
 
-NEXUS AI 是一个企业级多 Agent AI 协作平台，支持多个 AI Agent 在同一工作空间中协同工作。平台采用 **Supervisor-Worker** 架构模式，通过任务分解、并行执行、结果整合的流水线，让多个专业化 Agent 共同完成复杂任务。
+mutil AI 是一个企业级多 Agent AI 协作平台，支持多个 AI Agent 在同一工作空间中协同工作。平台采用 **Supervisor-Worker** 架构模式，通过任务分解、并行执行、结果整合的流水线，让多个专业化 Agent 共同完成复杂任务。
 
 ### 核心能力
 
