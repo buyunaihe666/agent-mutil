@@ -81,9 +81,9 @@ describe("AgentManagerUI", () => {
   it("shows model, permission level, and version info", () => {
     renderWithProviders(<AgentManagerUI />);
     expect(screen.getAllByText(/Model: deepseek-chat/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Level: L4")).toBeInTheDocument();
-    expect(screen.getByText("Level: L3")).toBeInTheDocument();
-    expect(screen.getByText("Level: L2")).toBeInTheDocument();
+    expect(screen.getByText(/Level: L4/)).toBeInTheDocument();
+    expect(screen.getByText(/Level: L3/)).toBeInTheDocument();
+    expect(screen.getByText(/Level: L2/)).toBeInTheDocument();
   });
 
   it("search filters agents by name", () => {

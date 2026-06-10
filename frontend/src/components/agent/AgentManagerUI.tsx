@@ -52,39 +52,46 @@ function AgentCard({
       className={cx(
         "border rounded-lg bg-white transition-shadow",
         isCompact
-          ? "border-gray-200 p-3 text-gray-900 shadow-sm hover:shadow-md"
+          ? "border-gray-200 p-2.5 text-gray-900 shadow-sm hover:shadow-md"
           : "p-4 dark:bg-gray-800 hover:shadow-md",
       )}
     >
       <div className="flex items-start justify-between">
-        <div className="flex gap-3">
-          <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center text-lg">
+        <div className="flex gap-2">
+          <div
+            className={cx(
+              "rounded-full bg-accent flex items-center justify-center shrink-0",
+              isCompact ? "w-7 h-7 text-sm" : "w-10 h-10 text-lg",
+            )}
+          >
             {agent.avatar_emoji ?? "🤖"}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-medium text-sm">{agent.name}</h3>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className={cx("font-medium", isCompact ? "text-xs" : "text-sm")}>
+                {agent.name}
+              </h3>
               {agent.is_preset && (
-                <span className="text-xs bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 px-1 py-0.5 rounded">
                   Preset
                 </span>
               )}
               {!agent.is_active && (
-                <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 px-1.5 py-0.5 rounded">
+                <span className="text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 px-1 py-0.5 rounded">
                   Inactive
                 </span>
               )}
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+            <p className={cx("text-muted-foreground mt-0.5", isCompact ? "text-[10px] line-clamp-1" : "text-xs line-clamp-2")}>
               {agent.description ?? t("status.empty")}
             </p>
           </div>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-0.5 shrink-0 ml-1">
           <button
             type="button"
             onClick={() => onEdit(agent.id)}
-            className="text-xs px-2 py-1 rounded hover:bg-accent"
+            className={cx("rounded hover:bg-accent", isCompact ? "text-[10px] px-1 py-0.5" : "text-xs px-2 py-1")}
             title={t("action.edit")}
             aria-label={`${t("action.edit")} ${agent.name}`}
           >
@@ -94,7 +101,7 @@ function AgentCard({
             <button
               type="button"
               onClick={() => onDelete(agent.id)}
-              className="text-xs px-2 py-1 rounded hover:bg-red-100 text-red-500"
+              className={cx("rounded hover:bg-red-100 text-red-500", isCompact ? "text-[10px] px-1 py-0.5" : "text-xs px-2 py-1")}
               title={t("action.delete")}
               aria-label={`${t("action.delete")} ${agent.name}`}
             >
@@ -103,20 +110,25 @@ function AgentCard({
           )}
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1">
-        {agent.tools?.map((tool: string) => (
+      <div className="mt-2 flex flex-wrap gap-1">
+        {(isCompact ? (agent.tools ?? []).slice(0, 2) : agent.tools ?? []).map((tool: string) => (
           <span
             key={tool}
-            className="text-xs bg-blue-50 dark:bg-blue-900 text-blue-700 dark:text-blue-200 px-1.5 py-0.5 rounded"
+            className={cx(
+              "bg-blue-50 dark:bg-blue-900 text-blue-700 dark:text-blue-200 rounded",
+              isCompact ? "text-[10px] px-1 py-0.5" : "text-xs px-1.5 py-0.5",
+            )}
           >
             {tool}
           </span>
         ))}
+        {isCompact && (agent.tools ?? []).length > 2 && (
+          <span className="text-[10px] text-gray-400">+{(agent.tools ?? []).length - 2}</span>
+        )}
       </div>
-      <div className="mt-3 flex justify-between text-xs text-muted-foreground">
-        <span>Model: {agent.default_model}</span>
-        <span>Level: L{agent.permission_level}</span>
-        <span>v{agent.version_count}</span>
+      <div className={cx("flex justify-between text-muted-foreground", isCompact ? "mt-1.5 text-[10px]" : "mt-3 text-xs")}>
+        <span>{isCompact ? agent.default_model : `Model: ${agent.default_model}`}</span>
+        <span>{isCompact ? `L${agent.permission_level} · v${agent.version_count}` : `Level: L${agent.permission_level} · v${agent.version_count}`}</span>
       </div>
     </div>
   );
@@ -418,32 +430,39 @@ function TemplateCard({
       className={cx(
         "border rounded-lg bg-white transition-shadow",
         isCompact
-          ? "border-gray-200 p-3 text-gray-900 shadow-sm hover:shadow-md"
+          ? "border-gray-200 p-2.5 text-gray-900 shadow-sm hover:shadow-md"
           : "p-4 dark:bg-gray-800 hover:shadow-md",
       )}
     >
       <div className="flex items-start justify-between">
-        <div className="flex gap-3">
-          <div className="w-10 h-10 rounded-full bg-accent flex items-center justify-center text-lg">
+        <div className="flex gap-2">
+          <div
+            className={cx(
+              "rounded-full bg-accent flex items-center justify-center shrink-0",
+              isCompact ? "w-7 h-7 text-sm" : "w-10 h-10 text-lg",
+            )}
+          >
             {template.avatar_emoji}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-medium text-sm">{template.name}</h3>
-              <span className="text-xs bg-blue-50 dark:bg-blue-900 text-blue-700 dark:text-blue-200 px-1.5 py-0.5 rounded">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h3 className={cx("font-medium", isCompact ? "text-xs" : "text-sm")}>
+                {template.name}
+              </h3>
+              <span className={cx("rounded", isCompact ? "text-[10px] bg-blue-50 text-blue-700 px-1 py-0.5" : "text-xs bg-blue-50 dark:bg-blue-900 text-blue-700 dark:text-blue-200 px-1.5 py-0.5")}>
                 {template.category}
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+            <p className={cx("text-muted-foreground mt-0.5", isCompact ? "text-[10px] line-clamp-1" : "text-xs line-clamp-2")}>
               {template.description}
             </p>
           </div>
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-0.5 shrink-0 ml-1">
           <button
             type="button"
             onClick={() => onEdit(template.id)}
-            className="text-xs px-2 py-1 rounded hover:bg-accent"
+            className={cx("rounded hover:bg-accent", isCompact ? "text-[10px] px-1 py-0.5" : "text-xs px-2 py-1")}
             title={t("action.edit")}
             aria-label={`${t("action.edit")} ${template.name}`}
           >
@@ -452,36 +471,44 @@ function TemplateCard({
           <button
             type="button"
             onClick={() => onDelete(template.id)}
-            className="text-xs px-2 py-1 rounded hover:bg-red-100 text-red-500"
+            className={cx("rounded hover:bg-red-100 text-red-500", isCompact ? "text-[10px] px-1 py-0.5" : "text-xs px-2 py-1")}
             title={t("action.delete")}
             aria-label={`${t("action.delete")} ${template.name}`}
           >
             🗑️
           </button>
+          <button
+            type="button"
+            onClick={() => onUse(template)}
+            className={cx("rounded bg-blue-600 text-white hover:bg-blue-700", isCompact ? "text-[10px] px-1.5 py-0.5" : "text-xs px-3 py-1")}
+          >
+            Use
+          </button>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1">
-        {template.tools.map((tool: string) => (
+      <div className="mt-2 flex flex-wrap gap-1">
+        {(isCompact ? template.tools.slice(0, 2) : template.tools).map((tool: string) => (
           <span
             key={tool}
-            className="text-xs bg-green-50 dark:bg-green-900 text-green-700 dark:text-green-200 px-1.5 py-0.5 rounded"
+            className={cx(
+              "bg-green-50 dark:bg-green-900 text-green-700 dark:text-green-200 rounded",
+              isCompact ? "text-[10px] px-1 py-0.5" : "text-xs px-1.5 py-0.5",
+            )}
           >
             {tool}
           </span>
         ))}
+        {isCompact && template.tools.length > 2 && (
+          <span className="text-[10px] text-gray-400">+{template.tools.length - 2}</span>
+        )}
       </div>
-      <div className="mt-3 flex justify-between items-center">
-        <span className="text-xs text-muted-foreground line-clamp-2 flex-1">
-          {template.system_prompt}
-        </span>
-        <button
-          type="button"
-          onClick={() => onUse(template)}
-          className="ml-2 text-xs px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 shrink-0"
-        >
-          Use
-        </button>
-      </div>
+      {!isCompact && (
+        <div className="mt-3 flex items-center">
+          <span className="text-xs text-muted-foreground line-clamp-2 flex-1">
+            {template.system_prompt}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -775,103 +802,84 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
         isCompact ? "bg-white text-gray-900" : "bg-chat dark:bg-chat-dark",
       )}
     >
-      {/* Header */}
+      {/* Tab Bar（含标题） */}
       <div
         className={cx(
-          "border-b flex items-center justify-between",
-          isCompact
-            ? "min-h-11 border-gray-200 bg-white px-3 py-2"
-            : "h-12 bg-white px-4 dark:bg-gray-900",
+          "flex items-center border-b bg-white",
+          isCompact ? "border-gray-200 min-h-9 px-3" : "border-gray-200 px-4 dark:border-gray-700",
         )}
       >
-        <h2
+        <span
           className={cx(
-            "font-medium",
-            isCompact ? "text-xs uppercase tracking-wide text-gray-500" : "text-sm",
+            "font-medium shrink-0 mr-3",
+            isCompact ? "text-[10px] uppercase tracking-wide text-gray-400" : "text-xs",
           )}
         >
           {t("nav.agents")}
-        </h2>
-      </div>
-
-      {/* Tab Bar */}
-      <div
-        className={cx(
-          "flex border-b bg-white",
-          isCompact ? "border-gray-200" : "border-gray-200 dark:border-gray-700",
-        )}
-        role="tablist"
-        aria-label="Agent tabs"
-      >
-        <button
-          type="button"
-          id="agent-tab-agents"
-          role="tab"
-          aria-selected={activeTab === "agents"}
-          onClick={() => dispatch(setActiveTab("agents"))}
-          className={tabButtonClass(activeTab === "agents", isCompact)}
+        </span>
+        <div
+          className="flex flex-1"
+          role="tablist"
+          aria-label="Agent tabs"
         >
-          {t("agent.tab.agents")}
-        </button>
-        <button
-          type="button"
-          id="agent-tab-templates"
-          role="tab"
-          aria-selected={activeTab === "templates"}
-          onClick={() => dispatch(setActiveTab("templates"))}
-          className={tabButtonClass(activeTab === "templates", isCompact)}
-        >
-          {t("agent.tab.templates")}
-        </button>
+          <button
+            type="button"
+            id="agent-tab-agents"
+            role="tab"
+            aria-selected={activeTab === "agents"}
+            onClick={() => dispatch(setActiveTab("agents"))}
+            className={tabButtonClass(activeTab === "agents", isCompact)}
+          >
+            {t("agent.tab.agents")}
+          </button>
+          <button
+            type="button"
+            id="agent-tab-templates"
+            role="tab"
+            aria-selected={activeTab === "templates"}
+            onClick={() => dispatch(setActiveTab("templates"))}
+            className={tabButtonClass(activeTab === "templates", isCompact)}
+          >
+            {t("agent.tab.templates")}
+          </button>
+        </div>
       </div>
 
       {/* Content */}
       <div
-        className={cx("flex-1 overflow-y-auto space-y-4", isCompact ? "p-3" : "p-4")}
+        className={cx("flex-1 overflow-y-auto", isCompact ? "p-2 space-y-2" : "p-4 space-y-4")}
         role="tabpanel"
         aria-labelledby={`agent-tab-${activeTab}`}
       >
         {/* ===== AGENTS TAB ===== */}
         {activeTab === "agents" && (
           <>
-            {/* Search, Filter + New Agent button */}
-            <div className={cx("flex gap-2", isCompact && "items-center")}>
+            {/* Search + Filter */}
+            <div className="flex gap-1.5">
               <input
                 value={searchQuery}
                 onChange={(e) => dispatch(setSearchQuery(e.target.value))}
                 placeholder={t("common.search")}
-                className={cx(
-                  "flex-1 border rounded-lg bg-white",
-                  isCompact
-                    ? "border-gray-200 px-2.5 py-1.5 text-xs text-gray-900 placeholder:text-gray-400"
-                    : "px-3 py-1.5 text-sm dark:bg-gray-800",
-                )}
+                className="flex-1 min-w-0 border rounded bg-white border-gray-200 px-2 py-1 text-[10px] text-gray-900 placeholder:text-gray-400 outline-none focus:border-blue-400"
               />
               <select
                 value={statusFilter}
                 onChange={(e) => dispatch(setStatusFilter(e.target.value as typeof statusFilter))}
-                className={cx(
-                  "border rounded-lg bg-white",
-                  isCompact
-                    ? "border-gray-200 px-2 py-1.5 text-xs text-gray-900"
-                    : "px-3 py-1.5 text-sm dark:bg-gray-800",
-                )}
+                className="border rounded bg-white border-gray-200 px-1.5 py-1 text-[10px] text-gray-900 shrink-0"
               >
                 <option value="all">All</option>
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
               </select>
-              <button
-                type="button"
-                onClick={() => dispatch(setEditingAgent("new"))}
-                className={cx(
-                  "text-xs rounded bg-blue-600 text-white hover:bg-blue-700",
-                  isCompact ? "px-2.5 py-1.5 shadow-sm" : "px-3 py-1",
-                )}
-              >
-                + New Agent
-              </button>
             </div>
+            {/* New Agent button */}
+            <button
+              type="button"
+              onClick={() => dispatch(setEditingAgent("new"))}
+              className="w-full text-[10px] rounded bg-blue-600 text-white hover:bg-blue-700 py-1"
+            >
+              + New Agent
+            </button>
 
             {/* Agent Editor (for new or editing existing agents) */}
             {editingAgentId && (
@@ -887,7 +895,7 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
             )}
 
             {/* Agent Grid */}
-            <div className={cx("grid", isCompact ? "gap-2" : "gap-3")}>
+            <div className={cx("grid", isCompact ? "gap-1.5" : "gap-3")}>
               {filtered.map((agent) => (
                 <div key={agent.id}>
                   <AgentCard
@@ -920,30 +928,21 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
         {/* ===== TEMPLATES TAB ===== */}
         {activeTab === "templates" && (
           <>
-            {/* Search + New Template button */}
-            <div className={cx("flex gap-2", isCompact && "items-center")}>
-              <input
-                value={templateSearchQuery}
-                onChange={(e) => dispatch(setTemplateSearchQuery(e.target.value))}
-                placeholder={t("common.search")}
-                className={cx(
-                  "flex-1 border rounded-lg bg-white",
-                  isCompact
-                    ? "border-gray-200 px-2.5 py-1.5 text-xs text-gray-900 placeholder:text-gray-400"
-                    : "px-3 py-1.5 text-sm dark:bg-gray-800",
-                )}
-              />
-              <button
-                type="button"
-                onClick={() => dispatch(setEditingTemplate("new"))}
-                className={cx(
-                  "text-xs rounded bg-blue-600 text-white hover:bg-blue-700",
-                  isCompact ? "px-2.5 py-1.5 shadow-sm" : "px-3 py-1",
-                )}
-              >
-                + New Template
-              </button>
-            </div>
+            {/* Search */}
+            <input
+              value={templateSearchQuery}
+              onChange={(e) => dispatch(setTemplateSearchQuery(e.target.value))}
+              placeholder={t("common.search")}
+              className="w-full border rounded bg-white border-gray-200 px-2 py-1 text-[10px] text-gray-900 placeholder:text-gray-400 outline-none focus:border-blue-400"
+            />
+            {/* New Template button */}
+            <button
+              type="button"
+              onClick={() => dispatch(setEditingTemplate("new"))}
+              className="w-full text-[10px] rounded bg-blue-600 text-white hover:bg-blue-700 py-1"
+            >
+              + New Template
+            </button>
 
             {/* Template Editor (for new or editing existing templates) */}
             {editingTemplateId && (
@@ -959,7 +958,7 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
             )}
 
             {/* Template Grid */}
-            <div className={cx("grid", isCompact ? "gap-2" : "gap-3")}>
+            <div className={cx("grid", isCompact ? "gap-1.5" : "gap-3")}>
               {filteredTemplates.map((tpl) => (
                 <TemplateCard
                   key={tpl.id}
