@@ -3,8 +3,11 @@
 import {
   type Conversation,
   type Message,
+  type ToolCall,
   addConversation,
   addMessage,
+  addToolCall,
+  updateToolCall,
   appendAgentDelta,
   finalizeAgentMessage,
   removeConversation,
@@ -12,6 +15,7 @@ import {
   togglePinConversation,
   updateConversation,
 } from "@/features/conversation/conversationSlice";
+import { setSelectedAgent } from "@/features/agent/agentSlice";
 import { t } from "@/i18n";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import type { AppDispatch, RootState } from "@/store";
@@ -26,8 +30,9 @@ import {
   Radio,
   Terminal,
   Trash2,
+  Bot,
 } from "lucide-react";
-import { type KeyboardEvent, useRef, useState } from "react";
+import { type KeyboardEvent, useRef, useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { EmptyState } from "@/components/shared/EmptyState";
 
@@ -45,6 +50,8 @@ function useConversationData() {
     activeConversationId,
     messages,
   } = useSelector((state: RootState) => state.conversation);
+  const selectedAgentId = useSelector((state: RootState) => state.agent.selectedAgentId);
+  const agents = useSelector((state: RootState) => state.agent.agents);
 
   const conversations = conversationsFromStore;
   const normalizedActiveConvId =
@@ -73,6 +80,14 @@ function useConversationData() {
         message_id?: string;
         status?: string;
         error_message?: string;
+        data?: {
+          tool_call_id?: string;
+          name?: string;
+          arguments?: Record<string, unknown>;
+          success?: boolean;
+          output?: string;
+          error?: string;
+        };
       };
 
       if (!activeConvId) return;
@@ -104,6 +119,27 @@ function useConversationData() {
         }));
       } else if (type === "agent_status") {
         // Status updates like "thinking" — could show an indicator
+      } else if (type === "tool_call_start") {
+        dispatch(addToolCall({
+          conversationId: activeConvId,
+          toolCall: {
+            id: msg.data?.tool_call_id ?? `tc-${Date.now()}`,
+            name: msg.data?.name ?? "unknown",
+            arguments: msg.data?.arguments ?? {},
+            status: "running",
+          },
+        }));
+      } else if (type === "tool_call_result") {
+        dispatch(updateToolCall({
+          conversationId: activeConvId,
+          toolCallId: msg.data?.tool_call_id ?? "",
+          updates: {
+            status: msg.data?.success ? "complete" : "error",
+            output: msg.data?.output,
+            error: msg.data?.error,
+            success: msg.data?.success,
+          },
+        }));
       } else if (type === "error") {
         console.error("WebSocket error:", msg.error_message);
       }
@@ -126,6 +162,8 @@ function useConversationData() {
   const handleSend = (content: string) => {
     if (!activeConvId) return;
     const messageId = createId("msg");
+    // Get selected agent info for display
+    const selectedAgent = agents.find((a) => a.id === selectedAgentId);
     dispatch(
       addMessage({
         conversationId: activeConvId,
@@ -133,6 +171,9 @@ function useConversationData() {
           id: messageId,
           role: "user",
           content,
+          agent_id: selectedAgentId ?? undefined,
+          agent_name: selectedAgent?.name,
+          agent_emoji: selectedAgent?.avatar_emoji,
           created_at: new Date().toISOString(),
         },
       }),
@@ -143,8 +184,13 @@ function useConversationData() {
       const title = content.length > 30 ? content.slice(0, 30) + "..." : content;
       dispatch(updateConversation({ id: activeConvId, title }));
     }
-    // Send via WebSocket to backend for agent response
-    wsSend("user_message", { conversation_id: activeConvId, content, message_id: messageId });
+    // Send via WebSocket to backend for agent response, with agent_id
+    wsSend("user_message", {
+      conversation_id: activeConvId,
+      content,
+      message_id: messageId,
+      agent_id: selectedAgentId,
+    });
   };
 
   const handlePin = (id: string) => {
@@ -311,9 +357,45 @@ function MessageBubble({ msg }: { msg: Message }) {
           {msg.content ? (
             <div className="whitespace-pre-wrap break-words">{msg.content}</div>
           ) : (
-            <div className="italic text-gray-400">...</div>
+            !msg.tool_calls && <div className="italic text-gray-400">...</div>
           )}
         </div>
+        {/* Tool calls display */}
+        {msg.tool_calls && msg.tool_calls.length > 0 && (
+          <div className="mt-1 space-y-1">
+            {msg.tool_calls.map((tc: ToolCall) => (
+              <details key={tc.id} className="rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs">
+                <summary className="cursor-pointer text-gray-500 hover:text-gray-700 select-none">
+                  <span className="mr-1">
+                    {tc.status === "running" ? "⏳" : tc.status === "complete" ? "✅" : "❌"}
+                  </span>
+                  <span className="font-medium">Tool: {tc.name}</span>
+                </summary>
+                <div className="mt-1.5 space-y-1 text-gray-600">
+                  <div>
+                    <span className="font-medium">Arguments:</span>
+                    <pre className="mt-0.5 overflow-x-auto rounded bg-gray-100 px-2 py-1 text-xs">
+                      {JSON.stringify(tc.arguments, null, 2)}
+                    </pre>
+                  </div>
+                  {tc.output && (
+                    <div>
+                      <span className="font-medium">Result:</span>
+                      <pre className="mt-0.5 overflow-x-auto rounded bg-gray-100 px-2 py-1 text-xs">
+                        {tc.output}
+                      </pre>
+                    </div>
+                  )}
+                  {tc.error && (
+                    <div className="text-red-500">
+                      <span className="font-medium">Error:</span> {tc.error}
+                    </div>
+                  )}
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -415,10 +497,51 @@ function ChatInput({ onSend }: { onSend: (content: string) => void }) {
 }
 
 export function ConversationWorkspace() {
-  const { activeMessages, activeConvId, onSend, onNew } = useConversationData();
+  const { onSend, onNew } = useConversationData();
+  const dispatch = useDispatch<AppDispatch>();
+  const selectedAgentId = useSelector((state: RootState) => state.agent.selectedAgentId);
+  const agentsFromStore = useSelector((state: RootState) => state.agent.agents);
+  const activeMessages = useSelector((state: RootState) => {
+    const convId = state.conversation.activeConversationId;
+    if (!convId) return [];
+    return state.conversation.messages[convId] ?? [];
+  });
+  const activeConvId = useSelector((state: RootState) => state.conversation.activeConversationId);
+  // Fallback to mock agents if store is empty (same pattern as AgentManagerUI)
+  const agentList = agentsFromStore.length > 0 ? agentsFromStore : [
+    { id: "1", name: "数字主管", avatar_emoji: "🎯", is_active: true },
+    { id: "2", name: "风控顾问", avatar_emoji: "🛡️", is_active: true },
+    { id: "3", name: "数据专家", avatar_emoji: "📊", is_active: true },
+  ];
+  const activeAgents = agentList.filter((a: { is_active?: boolean }) => a.is_active !== false);
+  const selectedAgent = activeAgents.find((a: { id: string }) => a.id === selectedAgentId) ?? activeAgents[0] ?? null;
+
+  // Auto-select first agent if none selected
+  useEffect(() => {
+    if (!selectedAgentId && activeAgents.length > 0) {
+      dispatch(setSelectedAgent(activeAgents[0].id));
+    }
+  }, [selectedAgentId, activeAgents, dispatch]);
 
   return (
     <div className="flex h-full flex-col bg-white">
+      {/* Agent Selector Header */}
+      {activeConvId && selectedAgent && (
+        <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-2">
+          <Bot size={16} className="text-gray-400" />
+          <select
+            value={selectedAgentId ?? ""}
+            onChange={(e) => dispatch(setSelectedAgent(e.target.value || null))}
+            className="flex-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-sm text-gray-700 outline-none focus:border-blue-500"
+          >
+            {activeAgents.map((a: { id: string; name: string; avatar_emoji?: string }) => (
+              <option key={a.id} value={a.id}>
+                {a.avatar_emoji ?? "🤖"} {a.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="flex-1 overflow-auto p-5">
         {activeConvId ? (
           activeMessages.length === 0 ? (

@@ -10,6 +10,16 @@ export interface Conversation {
   updated_at: string;
 }
 
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  output?: string;
+  error?: string;
+  success?: boolean;
+  status: "pending" | "running" | "complete" | "error";
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "agent";
@@ -17,6 +27,7 @@ export interface Message {
   agent_id?: string;
   agent_name?: string;
   agent_emoji?: string;
+  tool_calls?: ToolCall[];
   created_at: string;
 }
 
@@ -145,6 +156,54 @@ export const conversationSlice = createSlice({
         conv.updated_at = new Date().toISOString();
       }
     },
+    addToolCall: (
+      state,
+      action: PayloadAction<{
+        conversationId: string;
+        toolCall: ToolCall;
+      }>,
+    ) => {
+      const { conversationId, toolCall } = action.payload;
+      if (!state.messages[conversationId]) {
+        state.messages[conversationId] = [];
+      }
+      const msgs = state.messages[conversationId];
+      // Find the last assistant message to attach the tool call to
+      const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant");
+      if (lastAssistant) {
+        if (!lastAssistant.tool_calls) {
+          lastAssistant.tool_calls = [];
+        }
+        // Replace or add
+        const existingIdx = lastAssistant.tool_calls.findIndex((tc) => tc.id === toolCall.id);
+        if (existingIdx >= 0) {
+          lastAssistant.tool_calls[existingIdx] = toolCall;
+        } else {
+          lastAssistant.tool_calls.push(toolCall);
+        }
+      }
+    },
+    updateToolCall: (
+      state,
+      action: PayloadAction<{
+        conversationId: string;
+        toolCallId: string;
+        updates: Partial<ToolCall>;
+      }>,
+    ) => {
+      const { conversationId, toolCallId, updates } = action.payload;
+      const msgs = state.messages[conversationId];
+      if (!msgs) return;
+      for (const msg of msgs) {
+        if (msg.tool_calls) {
+          const tc = msg.tool_calls.find((t) => t.id === toolCallId);
+          if (tc) {
+            Object.assign(tc, updates);
+            return;
+          }
+        }
+      }
+    },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.isLoading = action.payload;
     },
@@ -165,6 +224,8 @@ export const {
   addMessage,
   appendAgentDelta,
   finalizeAgentMessage,
+  addToolCall,
+  updateToolCall,
   setLoading,
   setError,
 } = conversationSlice.actions;

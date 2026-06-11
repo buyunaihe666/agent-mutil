@@ -21,6 +21,8 @@ class MessageType(str, Enum):
     AGENT_MESSAGE = "agent_message"
     AGENT_DELTA = "agent_delta"
     AGENT_STATUS = "agent_status"
+    TOOL_CALL_START = "tool_call_start"
+    TOOL_CALL_RESULT = "tool_call_result"
     SYSTEM = "system"
     CONFIRM_ACTION = "confirm_action"
     CONTROL = "control"
