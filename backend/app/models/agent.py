@@ -25,4 +25,5 @@ class Agent(BaseModel):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=300)
     is_preset: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_meta: Mapped[bool] = mapped_column(Boolean, default=False)
     config_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)

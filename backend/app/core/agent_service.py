@@ -37,6 +37,7 @@ class AgentCreate(BaseModel):
     max_tokens: int = Field(4096, gt=0)
     timeout_seconds: int = Field(300, gt=0)
     config: Optional[dict] = None
+    is_meta: bool = False
 
 
 class AgentUpdate(BaseModel):
@@ -52,6 +53,7 @@ class AgentUpdate(BaseModel):
     timeout_seconds: Optional[int] = None
     is_active: Optional[bool] = None
     config: Optional[dict] = None
+    is_meta: Optional[bool] = None
 
 
 class AgentSummary(BaseModel):
@@ -62,6 +64,7 @@ class AgentSummary(BaseModel):
     permission_level: int = 1
     is_preset: bool = False
     is_active: bool = True
+    is_meta: bool = False
     tools: Optional[list[str]] = None
     created_at: str
     updated_at: str
@@ -81,6 +84,7 @@ class AgentDetail(BaseModel):
     timeout_seconds: int
     is_preset: bool = False
     is_active: bool = True
+    is_meta: bool = False
     config: Optional[dict] = None
     version_count: int = 0
     created_at: str
@@ -364,6 +368,7 @@ PRESET_AGENTS = [
             "- 当用户询问单一专业问题时，评估是否需要拆分，可能直接建议使用对应专业 Agent"
         ),
         "tools": ["file_read", "agent_communication"],
+        "auto_execute": True,  # Orchestrator auto-executes plans by default for backward compatibility
         "default_model": "deepseek-chat",
         "permission_level": 4,
         "temperature": 0.3,
@@ -560,6 +565,7 @@ class AgentStore:
             "timeout_seconds": data.timeout_seconds,
             "is_preset": False,
             "is_active": True,
+            "is_meta": data.is_meta,
             "config": data.config,
             "created_at": now,
             "updated_at": now,
