@@ -371,11 +371,54 @@ class FileWriteTool(BaseTool):
     )
 
     async def execute(self, **kwargs) -> ToolResult:
-        file_name = kwargs.get("file_name", "")
-        return ToolResult(
-            success=True,
-            output=f"File written: {file_name}",
-        )
+        file_name = (kwargs.get("file_name") or "").strip()
+        content = kwargs.get("content", "")
+
+        if not file_name:
+            return ToolResult(
+                success=False,
+                error="File name is required",
+            )
+
+        # Resolve storage root from YAML config
+        from app.core.yaml_config import get_yaml_config
+
+        yaml_config = get_yaml_config()
+        storage_local_path = yaml_config.get("storage", {}).get("local_path", "assets")
+        storage_root = Path(storage_local_path).resolve()
+
+        # Resolve the target path relative to storage root
+        resolved = (storage_root / file_name).resolve()
+
+        # Path traversal check: ensure resolved path is within storage root
+        storage_root_str = str(storage_root)
+        resolved_str = str(resolved)
+        if not resolved_str.startswith(storage_root_str + os.sep) and resolved_str != storage_root_str:
+            return ToolResult(
+                success=False,
+                error="File path is outside the asset storage directory",
+            )
+
+        try:
+            # Create parent directories if needed
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write content to file (UTF-8)
+            resolved.write_text(content, encoding="utf-8")
+
+            file_size = resolved.stat().st_size
+
+            return ToolResult(
+                success=True,
+                output=f"File written: {file_name} ({len(content)} chars, {file_size} bytes)",
+                data={"path": file_name, "size": file_size, "chars": len(content)},
+            )
+        except Exception as e:
+            logger.error("File write failed", error=str(e), path=file_name)
+            return ToolResult(
+                success=False,
+                error=f"Failed to write file: {str(e)}",
+            )
 
 
 class WebSearchTool(BaseTool):

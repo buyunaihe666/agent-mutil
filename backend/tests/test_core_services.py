@@ -721,6 +721,119 @@ class TestFileReadTool:
         assert result.data["content"] == "deep content"
 
 
+# --- FileWriteTool Tests ---
+
+
+class TestFileWriteTool:
+    """Tests for FileWriteTool with real file I/O."""
+
+    @pytest.fixture(autouse=True)
+    def setup_teardown(self):
+        """Create a temporary storage root for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.storage_root = Path(self.temp_dir.name).resolve()
+        self._patch = patch(
+            "app.core.yaml_config.get_yaml_config",
+            return_value={"storage": {"local_path": str(self.storage_root)}},
+        )
+        self._patch.start()
+        yield
+        self._patch.stop()
+        self.temp_dir.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_file_write_empty_name(self, t_registry):
+        """Empty file_name should return error."""
+        result = await t_registry.execute_tool(
+            "write_file", file_name="", content="some content"
+        )
+        assert result.success is False
+        assert "required" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_write_path_traversal_attack(self, t_registry):
+        """Path traversal attack should be rejected."""
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="../../../etc/malicious.txt",
+            content="evil",
+        )
+        assert result.success is False
+        assert "outside" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_write_success(self, t_registry):
+        """Successful write should return path and size info."""
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="report.txt",
+            content="Hello from FileWriteTool!",
+        )
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["path"] == "report.txt"
+        assert result.data["chars"] == 25
+        assert result.data["size"] == 25
+
+        # Verify file was actually written to disk
+        written_path = self.storage_root / "report.txt"
+        assert written_path.exists()
+        assert written_path.read_text(encoding="utf-8") == "Hello from FileWriteTool!"
+
+    @pytest.mark.asyncio
+    async def test_file_write_creates_parent_dirs(self, t_registry):
+        """Write should create parent directories automatically."""
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="a/b/c/nested.txt",
+            content="deeply nested content",
+        )
+        assert result.success is True
+        assert result.data["path"] == "a/b/c/nested.txt"
+
+        # Verify directory was created
+        nested_dir = self.storage_root / "a" / "b" / "c"
+        assert nested_dir.exists()
+        assert nested_dir.is_dir()
+
+        # Verify file content
+        written_path = nested_dir / "nested.txt"
+        assert written_path.read_text(encoding="utf-8") == "deeply nested content"
+
+    @pytest.mark.asyncio
+    async def test_file_write_overwrite_existing(self, t_registry):
+        """Overwriting an existing file should succeed."""
+        # Create initial file
+        existing = self.storage_root / "notes.txt"
+        existing.parent.mkdir(parents=True, exist_ok=True)
+        existing.write_text("original content", encoding="utf-8")
+
+        # Overwrite it
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="notes.txt",
+            content="updated content",
+        )
+        assert result.success is True
+        assert result.data["chars"] == 15
+        assert existing.read_text(encoding="utf-8") == "updated content"
+
+    @pytest.mark.asyncio
+    async def test_file_write_special_characters(self, t_registry):
+        """Write with special characters (Chinese, emoji, newlines) should succeed."""
+        special_content = "你好 NEXUS!\nLine 2 🚀\n\tIndented\n{json: true}"
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="special.txt",
+            content=special_content,
+        )
+        assert result.success is True
+        assert result.data["chars"] == len(special_content)
+
+        written_path = self.storage_root / "special.txt"
+        assert written_path.read_text(encoding="utf-8") == special_content
+
+
 # --- WebSearchTool Tests ---
 
 from unittest.mock import AsyncMock, patch
