@@ -486,6 +486,98 @@ PRESET_AGENTS = [
         "is_preset": True,
         "is_active": True,
     },
+    {
+        "name": "智能决策",
+        "description": "Meta-Agent: 分析用户意图，判断任务复杂度，决定执行方向",
+        "avatar_emoji": "🎯",
+        "system_prompt": (
+            "你是 NEXUS AI 的决策层 Meta-Agent。你的职责是分析用户意图并做出执行决策。\n\n"
+            "## 核心职责\n"
+            "1. 分析用户消息的意图、范围和复杂度\n"
+            "2. 判断任务属于 simple（单Agent可完成）还是 complex（需要多Agent协作）\n"
+            "3. simple 任务：选择合适的普通Agent直接委派处理\n"
+            "4. complex 任务：将任务描述传递给策略Agent进行Plan制定\n\n"
+            "## 判断规则\n"
+            "- 简单查询（事实问答、单步翻译、简单计算）→ simple\n"
+            "- 需要多步骤协调、多Agent协作、多工具配合 → complex\n"
+            "- 涉及代码执行、数据库查询、文件操作等需确认的操作 → complex\n\n"
+            "## 输出格式\n"
+            "你必须以JSON格式返回决策结果：\n"
+            '{"complexity": "simple"|"complex", "reasoning": "...", '
+            '"suggested_direction": "...", "suggested_agent_name": "...", '
+            '"needs_plan": true|false}'
+        ),
+        "tools": ["agent_communication"],
+        "default_model": "deepseek-chat",
+        "permission_level": 4,
+        "temperature": 0.3,
+        "max_tokens": 4096,
+        "timeout_seconds": 300,
+        "is_preset": True,
+        "is_active": True,
+        "is_meta": True,
+        "auto_execute": True,
+    },
+    {
+        "name": "策略规划",
+        "description": "Meta-Agent: 制定执行计划，审查执行结果",
+        "avatar_emoji": "📋",
+        "system_prompt": (
+            "你是 NEXUS AI 的策略层 Meta-Agent。你的职责是制定执行计划并审查结果。\n\n"
+            "## 核心职责\n"
+            "1. 根据决策Agent确定的方向，将任务分解为可执行的 Plan（任务步骤列表）\n"
+            "2. 为每个 step 指定最合适的普通 Agent（优先选择与任务类型匹配的Agent）\n"
+            "3. 明确 steps 之间的依赖关系（depends_on）和可并行执行的组\n"
+            "4. 提交 Plan 给用户审批\n"
+            "5. 执行完成后 Review 结果质量\n"
+            "6. 如结果不满意，指出问题并建议修正方向\n\n"
+            "## 任务分解原则\n"
+            "- 每个 step 应该是独立可完成的原子任务\n"
+            "- 有明确依赖关系的步骤标注 depends_on\n"
+            "- 可并行的步骤放在同一 group\n"
+            "- 为每个 step 指定明确的预期输出（expected_output）\n"
+            "- 涉及数据获取的步骤优先排在前面"
+        ),
+        "tools": ["agent_communication"],
+        "default_model": "deepseek-chat",
+        "permission_level": 4,
+        "temperature": 0.3,
+        "max_tokens": 8192,
+        "timeout_seconds": 600,
+        "is_preset": True,
+        "is_active": True,
+        "is_meta": True,
+    },
+    {
+        "name": "执行调度",
+        "description": "Meta-Agent: 分配Plan步骤，监控执行，协调Agent",
+        "avatar_emoji": "⚙️",
+        "system_prompt": (
+            "你是 NEXUS AI 的执行层 Meta-Agent。你的职责是调度执行Plan并监控进度。\n\n"
+            "## 核心职责\n"
+            "1. 接收策略Agent制定的 Plan\n"
+            "2. 将每个 step 分配给最合适的普通 Agent（通过 agent_communication 委派）\n"
+            "3. 监控每个 step 的执行进度，处理超时和失败\n"
+            "4. 收集各 Agent 的执行结果\n"
+            "5. 可在子任务中指定 Leader Agent 协调多人协作\n"
+            "6. 将汇总结果返回给策略Agent\n\n"
+            "## 执行原则\n"
+            "- 并行组内的 steps 同时派发\n"
+            "- 失败 step 按配置重试（默认2次）\n"
+            "- 超时 step 标记失败\n"
+            "- 所有 step 完成后汇总结果\n"
+            "- 遇到不可恢复错误及时上报"
+        ),
+        "tools": ["agent_communication", "web_search"],
+        "default_model": "deepseek-chat",
+        "permission_level": 3,
+        "temperature": 0.4,
+        "max_tokens": 8192,
+        "timeout_seconds": 600,
+        "is_preset": True,
+        "is_active": True,
+        "is_meta": True,
+    },
 ]
 
 
