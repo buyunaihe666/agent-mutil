@@ -146,10 +146,11 @@ describe("AgentManagerUI", () => {
     expect(screen.getByText("代码审查")).toBeInTheDocument();
     expect(screen.getByText("文档撰写")).toBeInTheDocument();
     expect(screen.getByText("数据分析")).toBeInTheDocument();
+    expect(screen.getByText("安全审计")).toBeInTheDocument();
 
     // Each template card should have a Use button
     const useButtons = screen.getAllByText("Use");
-    expect(useButtons.length).toBe(4);
+    expect(useButtons.length).toBe(5);
   });
 
   it("clicking Use on a template creates a new agent and switches to agents tab", () => {
@@ -270,9 +271,9 @@ describe("AgentManagerUI", () => {
 
     // Each template should have edit and delete buttons
     const editButtons = screen.getAllByRole("button", { name: /^编辑 / });
-    expect(editButtons.length).toBe(4);
+    expect(editButtons.length).toBe(5);
     const deleteButtons = screen.getAllByRole("button", { name: /^删除 / });
-    expect(deleteButtons.length).toBe(4);
+    expect(deleteButtons.length).toBe(5);
   });
 
   it("template edit button opens editor with prefilled data", () => {
