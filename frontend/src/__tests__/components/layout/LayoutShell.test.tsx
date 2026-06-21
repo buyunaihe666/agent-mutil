@@ -42,7 +42,7 @@ describe("LayoutShell", () => {
     expect(screen.getByText("sales_report.csv")).toBeInTheDocument();
   });
 
-  it("renders center conversation workspace", () => {
+  it("renders center conversation workspace empty state", () => {
     renderWithProviders(
       <Routes>
         <Route element={<LayoutShell />}>
@@ -52,9 +52,9 @@ describe("LayoutShell", () => {
       { initialRoute: "/" },
     );
 
-    expect(screen.getByText(/建议：建议主攻/)).toBeInTheDocument();
-    expect(screen.getByText("spider_probe_server.py")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("输入您的问题...")).toBeInTheDocument();
+    expect(screen.getByText("没有对话")).toBeInTheDocument();
+    expect(screen.getByText("点击左侧「新建对话」按钮开始")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "新建对话" }).length).toBeGreaterThan(0);
   });
 
   it("renders right workspace tabs and switches to Agent", () => {
