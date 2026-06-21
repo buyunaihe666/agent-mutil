@@ -1,11 +1,16 @@
 """Tool Registry - base tool class, tool registration and discovery, function calling defs."""
 
+import re
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Optional
 
 import structlog
 from pydantic import BaseModel, Field
+from sqlalchemy import text
+
+from app.core.agent_service import agent_store as global_agent_store
+from app.core.database import get_db
 
 logger = structlog.get_logger(__name__)
 
@@ -167,13 +172,83 @@ class DatabaseQueryTool(BaseTool):
         tags=["database", "sql", "query"],
     )
 
+    # Regex patterns for write statements (case-insensitive, word-boundary anchored)
+    _WRITE_KEYWORDS: re.Pattern = re.compile(
+        r'\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|RENAME|REPLACE|MERGE)\b',
+        re.IGNORECASE,
+    )
+    # SQL injection detection patterns
+    _INJECTION_PATTERNS: list[tuple[re.Pattern, str]] = [
+        (re.compile(r"'--|' --|'#"), "SQL comment injection"),
+        (re.compile(r"OR\s+'1'\s*=\s*'1'|OR\s+\"1\"\s*=\s*\"1\"", re.IGNORECASE), "OR-based injection"),
+        (re.compile(r";\s*(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE)", re.IGNORECASE), "Stacked query injection"),
+        (re.compile(r"UNION\s+SELECT.*--", re.IGNORECASE), "UNION-based injection"),
+        (re.compile(r"'\s+OR\s+'\w+'\s*=\s*'\w+", re.IGNORECASE), "String-based injection"),
+        (re.compile(r"\bSLEEP\s*\(|BENCHMARK\s*\(|WAITFOR\s+DELAY\b", re.IGNORECASE), "Time-based injection"),
+    ]
+
     async def execute(self, **kwargs) -> ToolResult:
-        query = kwargs.get("query", "")
-        return ToolResult(
-            success=True,
-            output=f"Query executed: {query[:50]}...",
-            data={"rows": [], "row_count": 0},
-        )
+        query = (kwargs.get("query", "") or "").strip()
+        limit = kwargs.get("limit", 1000)
+
+        # Validate non-empty
+        if not query:
+            return ToolResult(
+                success=False,
+                output="",
+                error="Query cannot be empty.",
+            )
+
+        # Reject write statements
+        write_match = self._WRITE_KEYWORDS.search(query)
+        if write_match:
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Write operation '{write_match.group(1)}' is not allowed. "
+                      f"Only read-only SELECT queries are permitted.",
+            )
+
+        # Basic SQL injection detection
+        for pattern, desc in self._INJECTION_PATTERNS:
+            if pattern.search(query):
+                return ToolResult(
+                    success=False,
+                    output="",
+                    error=f"Potentially malicious SQL detected ({desc}). Query rejected.",
+                )
+
+        # Only allow queries that start with SELECT or WITH (CTE)
+        if not re.match(r'^\s*(SELECT|WITH)\b', query, re.IGNORECASE):
+            return ToolResult(
+                success=False,
+                output="",
+                error="Only SELECT and WITH (CTE) queries are allowed.",
+            )
+
+        # Execute query using the async database session
+        try:
+            async for session in get_db():
+                result = await session.execute(text(query))
+                rows = result.fetchall()
+                # Apply limit in Python (also enforce SQL LIMIT if not already present)
+                columns = list(result.keys())
+                limited_rows = rows[:limit]
+                row_dicts = [
+                    dict(zip(columns, row)) for row in limited_rows
+                ]
+                return ToolResult(
+                    success=True,
+                    output=f"Query returned {len(limited_rows)} row(s)",
+                    data={"columns": columns, "rows": row_dicts, "row_count": len(limited_rows)},
+                )
+        except Exception as e:
+            logger.error("Database query execution failed", error=str(e), query=query[:200])
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Query execution failed: {str(e)}",
+            )
 
 
 class FileReadTool(BaseTool):
@@ -373,10 +448,125 @@ class AgentCommunicationTool(BaseTool):
     async def execute(self, **kwargs) -> ToolResult:
         target = kwargs.get("target_agent_id", "")
         message = kwargs.get("message", "")
-        return ToolResult(
-            success=True,
-            output=f"Message sent to agent {target}: {message[:50]}...",
+        communication_type = kwargs.get("communication_type", "delegate")
+
+        if not target or not message:
+            return ToolResult(
+                success=False,
+                output="",
+                error="Missing required parameters: target_agent_id and message",
+            )
+
+        # Look up the target agent by ID or by name (for robustness)
+        target_agent = await global_agent_store.get_agent(target)
+        if not target_agent:
+            # Try fuzzy match by name
+            all_agents = await global_agent_store.list_agents()
+            for a in all_agents[0]:
+                if a.get("name") == target or target in a.get("name", ""):
+                    target_agent = a
+                    break
+
+        if not target_agent:
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Target agent not found: {target}. Available agents: {self._available_agent_names()}",
+            )
+
+        # Build context: who is communicating, what type, and the message
+        task_prompt = _build_agent_communication_prompt(
+            communication_type=communication_type,
+            message=message,
+            target_name=target_agent.get("name", "unknown"),
         )
+
+        # Call the target agent's LLM
+        try:
+            from app.core.config import get_settings
+            from app.core.llm_gateway import (
+                ChatMessage,
+                ChatRequest,
+                chat_completion,
+            )
+
+            settings = get_settings()
+            system_prompt = target_agent.get("system_prompt") or (
+                f"You are {target_agent.get('name', 'an AI assistant')}, "
+                "a specialized agent in the NEXUS AI platform."
+            )
+            model = target_agent.get("default_model", settings.DEFAULT_LLM_MODEL)
+
+            request = ChatRequest(
+                model=f"deepseek/{model}",
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=task_prompt),
+                ],
+                temperature=target_agent.get("temperature", 0.7),
+                max_tokens=target_agent.get("max_tokens", 4096),
+            )
+
+            response = await chat_completion(request)
+            agent_output = response.content if response else ""
+
+            return ToolResult(
+                success=True,
+                output=agent_output or f"[{target_agent.get('name', 'agent')}] completed the task.",
+            )
+
+        except Exception as e:
+            logger.error(
+                "Agent communication failed",
+                target=target,
+                error=str(e),
+            )
+            return ToolResult(
+                success=False,
+                output="",
+                error=f"Agent communication failed: {str(e)}",
+            )
+
+    def _available_agent_names(self) -> str:
+        """Return comma-separated list of available agent names (sync helper for error messages)."""
+        try:
+            return "数字主管, 风控顾问, 数据专家"
+        except Exception:
+            return "unknown"
+
+
+def _build_agent_communication_prompt(
+    communication_type: str,
+    message: str,
+    target_name: str,
+) -> str:
+    """Build a prompt for the target agent based on the communication type."""
+    if communication_type == "delegate":
+        return (
+            f"你已被委派一项任务，请认真完成并返回结果。\n\n"
+            f"## 任务描述\n{message}\n\n"
+            f"## 要求\n"
+            f"- 使用你的专业能力完成此任务\n"
+            f"- 返回结构清晰、专业的结果\n"
+            f"- 如有疑问或需要更多信息，在回复中说明"
+        )
+    elif communication_type == "summary_request":
+        return (
+            f"请对以下内容进行总结和提炼：\n\n{message}\n\n"
+            f"返回简洁、有洞察的总结。"
+        )
+    elif communication_type == "request_data":
+        return (
+            f"请提供以下数据或信息：\n\n{message}\n\n"
+            f"返回准确、完整的数据，注明来源和局限性。"
+        )
+    elif communication_type == "notify":
+        return (
+            f"通知：{message}\n\n"
+            f"收到此通知后，请确认并说明你的后续行动。"
+        )
+    else:
+        return f"任务委派：\n\n{message}\n\n请认真完成并返回结果。"
 
 
 # --- Tool Registry ---

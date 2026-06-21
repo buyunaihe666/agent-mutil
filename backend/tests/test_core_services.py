@@ -436,6 +436,151 @@ def test_audit_tool_category(t_registry):
     assert tools[0].name == "code_execution_audit"
 
 
+# --- DatabaseQueryTool Tests ---
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+@pytest.mark.asyncio
+async def test_query_tool_empty_query(t_registry):
+    """Empty query should be rejected."""
+    result = await t_registry.execute_tool("query_database", query="")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_insert(t_registry):
+    """INSERT statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="INSERT INTO users (name) VALUES ('test')")
+    assert result.success is False
+    assert "INSERT" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_update(t_registry):
+    """UPDATE statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="UPDATE users SET name = 'hacked' WHERE id = 1")
+    assert result.success is False
+    assert "UPDATE" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_delete(t_registry):
+    """DELETE statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="DELETE FROM users WHERE id = 1")
+    assert result.success is False
+    assert "DELETE" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_drop(t_registry):
+    """DROP statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="DROP TABLE users")
+    assert result.success is False
+    assert "DROP" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_comment_injection(t_registry):
+    """Comment-based SQL injection should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="SELECT * FROM users WHERE name = 'admin' --'")
+    assert result.success is False
+    assert "injection" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_or_injection(t_registry):
+    """OR-based SQL injection should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="SELECT * FROM users WHERE name = 'x' OR '1'='1'")
+    assert result.success is False
+    assert "injection" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_stacked_query(t_registry):
+    """Stacked query injection should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="SELECT * FROM users; DROP TABLE users")
+    assert result.success is False
+    # Caught by either injection patterns or write keyword check (DROP)
+    err = result.error.lower()
+    assert "injection" in err or "drop" in err or "select and with" in err.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_accept_valid_select(t_registry):
+    """Valid SELECT query should be accepted and executed."""
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.keys.return_value = ["id", "name"]
+    # Use a tuple so zip(columns, row) works naturally
+    mock_result.fetchall.return_value = [(1, "test")]
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.close = AsyncMock()
+
+    async def mock_get_db():
+        yield mock_session
+
+    with patch("app.core.tool_registry.get_db", side_effect=mock_get_db):
+        result = await t_registry.execute_tool("query_database",
+            query="SELECT id, name FROM users LIMIT 10")
+        assert result.success is True
+        assert result.data is not None
+        assert "columns" in result.data
+        assert result.data["columns"] == ["id", "name"]
+        assert len(result.data["rows"]) == 1
+        assert result.data["rows"][0] == {"id": 1, "name": "test"}
+
+
+@pytest.mark.asyncio
+async def test_query_tool_accept_cte(t_registry):
+    """WITH (CTE) query should be accepted."""
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.keys.return_value = ["count"]
+    mock_result.fetchall.return_value = []
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.close = AsyncMock()
+
+    async def mock_get_db():
+        yield mock_session
+
+    with patch("app.core.tool_registry.get_db", side_effect=mock_get_db):
+        result = await t_registry.execute_tool("query_database",
+            query="WITH active_users AS (SELECT * FROM users WHERE active = true) SELECT count(*) FROM active_users")
+        assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_query_tool_db_error_handling(t_registry):
+    """Database errors should be caught and returned gracefully."""
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(side_effect=Exception("Connection refused"))
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.close = AsyncMock()
+
+    async def mock_get_db():
+        yield mock_session
+
+    with patch("app.core.tool_registry.get_db", side_effect=mock_get_db):
+        result = await t_registry.execute_tool("query_database",
+            query="SELECT * FROM users")
+        assert result.success is False
+        assert "Connection refused" in result.error
+
+
 # --- Sandbox Manager Tests (M7) ---
 
 from app.core.sandbox_manager import (
@@ -709,6 +854,200 @@ async def test_parallel_groups(orch_engine):
         available_agents=[],
     )
     assert len(plan.parallel_groups) >= 1
+
+
+@pytest.mark.asyncio
+async def test_execute_step_retry(orch_engine):
+    """Step should retry on transient failure up to step_retry_count times."""
+    from unittest.mock import AsyncMock, patch
+
+    plan = await orch_engine.create_plan(
+        title="Retry Test",
+        subtask_descriptions=["Step that fails transiently"],
+        available_agents=[{"id": "agent-1", "name": "Test Agent"}],
+    )
+    call_count = 0
+
+    async def mock_chat_completion(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise ConnectionError("Transient connection error")
+        from types import SimpleNamespace
+        return SimpleNamespace(content="Success after retry")
+
+    mock_agent_store = AsyncMock()
+    mock_agent_store.get_agent = AsyncMock(return_value={
+        "id": "agent-1", "name": "Test Agent", "system_prompt": "You are a test agent.",
+        "default_model": "test", "temperature": 0.5, "max_tokens": 1024,
+    })
+
+    with patch("app.core.agent_service.agent_store", mock_agent_store), \
+         patch("app.core.llm_gateway.chat_completion", side_effect=mock_chat_completion):
+        result = await orch_engine._execute_step(plan.plan_id, plan.subtasks[0].step_id)
+
+    assert result.status == StepStatus.COMPLETED
+    assert result.retry_count == 2  # Failed twice, succeeded on 3rd attempt
+    assert "Success after retry" in result.output
+
+
+@pytest.mark.asyncio
+async def test_execute_step_non_retryable(orch_engine):
+    """Step should NOT retry on non-retryable errors like ValueError."""
+    from unittest.mock import AsyncMock, patch
+
+    plan = await orch_engine.create_plan(
+        title="Non-Retryable Test",
+        subtask_descriptions=["Step with validation error"],
+        available_agents=[{"id": "agent-1", "name": "Test Agent"}],
+    )
+
+    async def mock_chat_completion(*args, **kwargs):
+        raise ValueError("Invalid input data")
+
+    mock_agent_store = AsyncMock()
+    mock_agent_store.get_agent = AsyncMock(return_value={
+        "id": "agent-1", "name": "Test Agent", "system_prompt": "You are a test agent.",
+        "default_model": "test", "temperature": 0.5, "max_tokens": 1024,
+    })
+
+    with patch("app.core.agent_service.agent_store", mock_agent_store), \
+         patch("app.core.llm_gateway.chat_completion", side_effect=mock_chat_completion):
+        result = await orch_engine._execute_step(plan.plan_id, plan.subtasks[0].step_id)
+
+    assert result.status == StepStatus.FAILED
+    assert result.retry_count == 0  # No retries for non-retryable error
+    assert "Invalid input data" in result.error
+
+
+@pytest.mark.asyncio
+async def test_pause_resume_during_execution(orch_engine):
+    """Plan should pause when requested and resume correctly.
+
+    Uses an agent with a mock slow LLM so pause can be triggered
+    between parallel groups.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    # Build subtasks explicitly with separate parallel groups
+    from app.core.orchestration_engine import SubTask, DependencyType
+    s1 = SubTask(description="Step A", assigned_agent_id="agent-delay", assigned_agent_name="Slow Agent")
+    s2 = SubTask(description="Step B", assigned_agent_id="agent-delay", assigned_agent_name="Slow Agent",
+                  dependencies=[s1.step_id], dependency_type=DependencyType.SEQUENTIAL)
+
+    plan = await orch_engine.create_plan(
+        title="Pause Test",
+        subtask_descriptions=[],  # Not used when subtasks provided
+        available_agents=[],
+        subtasks=[s1, s2],
+    )
+    # Verify two separate parallel groups
+    assert len(plan.parallel_groups) == 2, f"Expected 2 groups, got {len(plan.parallel_groups)}"
+
+    async def slow_completion(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        from types import SimpleNamespace
+        return SimpleNamespace(content="Done")
+
+    mock_agent_store = AsyncMock()
+    mock_agent_store.get_agent = AsyncMock(return_value={
+        "id": "agent-delay", "name": "Slow Agent", "system_prompt": "You are a test agent.",
+        "default_model": "test", "temperature": 0.5, "max_tokens": 1024,
+    })
+
+    async def run_plan():
+        return await orch_engine.execute_plan(plan.plan_id)
+
+    with patch("app.core.agent_service.agent_store", mock_agent_store), \
+         patch("app.core.llm_gateway.chat_completion", side_effect=slow_completion):
+        bg_task = asyncio.create_task(run_plan())
+
+        # Give it a moment to start executing the first group
+        await asyncio.sleep(0.1)
+
+        # Pause should succeed during RUNNING
+        paused = await orch_engine.pause(plan.plan_id)
+        assert paused is True, f"pause returned False, status={orch_engine.get_status(plan.plan_id)}"
+        assert orch_engine.get_status(plan.plan_id) == TaskStatus.PAUSED
+
+        # Resume
+        resumed = await orch_engine.resume(plan.plan_id)
+        assert resumed is True
+        assert orch_engine.get_status(plan.plan_id) == TaskStatus.RUNNING
+
+        # Wait for completion
+        results = await bg_task
+
+    assert len(results) == 2
+    assert orch_engine.get_status(plan.plan_id) == TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_execution(orch_engine):
+    """Cancel should stop plan execution and skip remaining steps."""
+    plan = await orch_engine.create_plan(
+        title="Cancel Test",
+        subtask_descriptions=["Step A", "Step B"],
+        available_agents=[],
+    )
+
+    cancel_called = False
+
+    async def run_plan():
+        return await orch_engine.execute_plan(plan.plan_id)
+
+    bg_task = asyncio.create_task(run_plan())
+    await asyncio.sleep(0.05)
+
+    cancelled = await orch_engine.cancel(plan.plan_id)
+    assert cancelled is True
+    assert orch_engine.get_status(plan.plan_id) == TaskStatus.CANCELLED
+
+    results = await bg_task
+    # All steps should be either completed or skipped
+    assert orch_engine.get_status(plan.plan_id) == TaskStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_step_event_callback(orch_engine):
+    """Engine should emit correct events through callback during execution."""
+    events = []
+
+    async def track_events(event_type: str, plan_id: str, data: dict | None):
+        events.append({"type": event_type, "plan_id": plan_id, "data": data})
+
+    plan = await orch_engine.create_plan(
+        title="Event Test",
+        subtask_descriptions=["Step 1"],
+        available_agents=[],
+    )
+
+    results = await orch_engine.execute_plan(plan.plan_id, on_event=track_events)
+
+    assert len(results) == 1
+    event_types = [e["type"] for e in events]
+    assert "step_started" in event_types
+    assert "step_completed" in event_types
+    assert "plan_completed" in event_types
+
+
+@pytest.mark.asyncio
+async def test_compute_parallel_groups_topological(orch_engine):
+    """Parallel groups should respect explicit dependency step_ids."""
+    from app.core.orchestration_engine import SubTask, DependencyType
+
+    s1 = SubTask(description="Independent A")
+    s2 = SubTask(description="Depends on A", dependencies=[s1.step_id],
+                  dependency_type=DependencyType.SEQUENTIAL)
+    s3 = SubTask(description="Independent B")
+
+    groups = orch_engine._compute_parallel_groups([s1, s2, s3])
+
+    # s1 and s3 should be in first group (no deps), s2 in second group
+    assert len(groups) == 2
+    assert s1.step_id in groups[0]
+    assert s3.step_id in groups[0]
+    assert s2.step_id in groups[1]
 
 
 # --- Monitor Service Tests (M10) ---
