@@ -410,9 +410,17 @@ def test_unregister_tool(t_registry):
 
 
 @pytest.mark.asyncio
-async def test_execute_tool(t_registry):
-    result = await t_registry.execute_tool("read_file", file_path="test.txt")
-    assert result.success is True
+async def test_execute_tool(t_registry, tmp_path):
+    # Create a real file in a temp dir and patch the config
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("hello", encoding="utf-8")
+    with patch(
+        "app.core.yaml_config.get_yaml_config",
+        return_value={"storage": {"local_path": str(tmp_path)}},
+    ):
+        result = await t_registry.execute_tool("read_file", file_path="test.txt")
+        assert result.success is True
+        assert result.data["content"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -579,6 +587,264 @@ async def test_query_tool_db_error_handling(t_registry):
             query="SELECT * FROM users")
         assert result.success is False
         assert "Connection refused" in result.error
+
+
+# --- FileReadTool Tests ---
+
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+
+class TestFileReadTool:
+    """Tests for FileReadTool with real file I/O."""
+
+    @pytest.fixture(autouse=True)
+    def setup_teardown(self):
+        """Create a temporary storage root for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.storage_root = Path(self.temp_dir.name).resolve()
+        # Patch storage.local_path to point to our temp dir
+        self._patch = patch(
+            "app.core.yaml_config.get_yaml_config",
+            return_value={"storage": {"local_path": str(self.storage_root)}},
+        )
+        self._patch.start()
+        yield
+        self._patch.stop()
+        self.temp_dir.cleanup()
+
+    def _create_file(self, rel_path: str, content: str = "hello world") -> Path:
+        """Helper: create a file under the temp storage root."""
+        full_path = self.storage_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+        return full_path
+
+    @pytest.mark.asyncio
+    async def test_file_read_empty_path(self, t_registry):
+        """Empty path should return error."""
+        result = await t_registry.execute_tool("read_file", file_path="")
+        assert result.success is False
+        assert "required" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_path_traversal_attack(self, t_registry):
+        """Path traversal attack (e.g. ../../../etc/passwd) should be rejected."""
+        result = await t_registry.execute_tool(
+            "read_file", file_path="../../../etc/passwd"
+        )
+        assert result.success is False
+        assert "outside" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_not_found(self, t_registry):
+        """Non-existent file should return error."""
+        result = await t_registry.execute_tool(
+            "read_file", file_path="nonexistent.txt"
+        )
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_directory_not_file(self, t_registry):
+        """Directory path should return error."""
+        subdir = self.storage_root / "subdir"
+        subdir.mkdir(exist_ok=True)
+        result = await t_registry.execute_tool("read_file", file_path="subdir")
+        assert result.success is False
+        assert "not a file" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_success(self, t_registry):
+        """Reading a valid text file should return its content."""
+        self._create_file("notes.txt", "Hello from NEXUS AI!")
+        result = await t_registry.execute_tool("read_file", file_path="notes.txt")
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["content"] == "Hello from NEXUS AI!"
+        assert result.data["size"] == 20
+        assert result.data["path"] == "notes.txt"
+
+    @pytest.mark.asyncio
+    async def test_file_read_too_large(self, t_registry):
+        """Files larger than 10MB should be rejected."""
+        big_path = self._create_file("big_file.txt", "x")
+        # Simulate a file larger than 10MB by patching stat
+        mock_stat = os.stat(str(big_path))
+        mock_stat_result = list(mock_stat)
+        # Set file size to 11MB
+        mock_stat_result[6] = 11 * 1024 * 1024
+        import stat as stat_module
+
+        class MockStatResult:
+            def __init__(self, values):
+                self._values = values
+
+            def __getattr__(self, name):
+                # map stat result tuple indices
+                mapping = {
+                    "st_mode": 0, "st_ino": 1, "st_dev": 2, "st_nlink": 3,
+                    "st_uid": 4, "st_gid": 5, "st_size": 6,
+                    "st_atime": 7, "st_mtime": 8, "st_ctime": 9,
+                }
+                if name in mapping:
+                    return self._values[mapping[name]]
+                raise AttributeError(name)
+
+        with patch.object(Path, "stat", return_value=MockStatResult(mock_stat_result)):
+            result = await t_registry.execute_tool("read_file", file_path="big_file.txt")
+            assert result.success is False
+            assert "too large" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_binary_file_metadata(self, t_registry):
+        """Binary files should return metadata only, not content."""
+        bin_path = self.storage_root / "image.bin"
+        bin_path.write_bytes(b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d")
+        result = await t_registry.execute_tool("read_file", file_path="image.bin")
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["content"] == "[binary file]"
+        assert result.data["size"] == 12
+        assert result.data["path"] == "image.bin"
+
+    @pytest.mark.asyncio
+    async def test_file_read_nested_subdirectory(self, t_registry):
+        """Files in nested subdirectories should be readable."""
+        self._create_file("a/b/c/deep.txt", "deep content")
+        result = await t_registry.execute_tool(
+            "read_file", file_path="a/b/c/deep.txt"
+        )
+        assert result.success is True
+        assert result.data["content"] == "deep content"
+
+
+# --- WebSearchTool Tests ---
+
+from unittest.mock import AsyncMock, patch
+import httpx
+
+
+@pytest.mark.asyncio
+async def test_web_search_empty_query(t_registry):
+    """Empty query should return error."""
+    result = await t_registry.execute_tool("search_web", query="")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_web_search_success(t_registry):
+    """Successful search should return results with title/url/snippet."""
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(return_value={
+        "AbstractText": "Python is a programming language.",
+        "AbstractURL": "https://en.wikipedia.org/wiki/Python",
+        "Heading": "Python (programming language)",
+        "RelatedTopics": [
+            {
+                "Text": "Python is widely used in data science.",
+                "FirstURL": "https://en.wikipedia.org/wiki/Python_(data_science)",
+            },
+            {
+                "Text": "Python supports multiple paradigms.",
+                "FirstURL": "https://en.wikipedia.org/wiki/Python_(programming_paradigm)",
+            },
+        ],
+    })
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("search_web", query="Python")
+
+    assert result.success is True
+    assert "Found" in result.output
+    assert "results" in result.data
+    assert len(result.data["results"]) >= 1
+    # First result should have all three fields
+    first = result.data["results"][0]
+    assert "title" in first
+    assert "url" in first
+    assert "snippet" in first
+
+
+@pytest.mark.asyncio
+async def test_web_search_no_results(t_registry):
+    """Empty results should still return success with empty list."""
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(return_value={
+        "AbstractText": "",
+        "RelatedTopics": [],
+    })
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("search_web", query="xyznonexistent12345")
+
+    assert result.success is True
+    assert result.data["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_web_search_http_error(t_registry):
+    """HTTP errors should be handled gracefully."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    error_response = AsyncMock()
+    error_response.status_code = 500
+    mock_client.get = AsyncMock(side_effect=httpx.HTTPStatusError(
+        "Server error", request=AsyncMock(), response=error_response,
+    ))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("search_web", query="test")
+
+    assert result.success is False
+    assert "HTTP 500" in result.error
+
+
+@pytest.mark.asyncio
+async def test_web_search_timeout(t_registry):
+    """Timeout errors should be handled gracefully."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Request timed out"))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("search_web", query="test")
+
+    assert result.success is False
+    assert "timed out" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_web_search_network_error(t_registry):
+    """General network errors should be handled gracefully."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(side_effect=Exception("Network unreachable"))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("search_web", query="test")
+
+    assert result.success is False
+    assert "Network unreachable" in result.error
 
 
 # --- Sandbox Manager Tests (M7) ---

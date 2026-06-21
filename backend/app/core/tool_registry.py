@@ -1,8 +1,11 @@
 """Tool Registry - base tool class, tool registration and discovery, function calling defs."""
 
+import httpx
+import os
 import re
 from abc import ABC, abstractmethod
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
 import structlog
@@ -278,12 +281,63 @@ class FileReadTool(BaseTool):
     )
 
     async def execute(self, **kwargs) -> ToolResult:
-        file_path = kwargs.get("file_path", "")
-        return ToolResult(
-            success=True,
-            output=f"File read: {file_path}",
-            data={"content": "File content placeholder"},
-        )
+        file_path = (kwargs.get("file_path") or "").strip()
+
+        if not file_path:
+            return ToolResult(
+                success=False,
+                error="File path is required",
+            )
+
+        # Resolve storage root from YAML config
+        from app.core.yaml_config import get_yaml_config
+
+        yaml_config = get_yaml_config()
+        storage_local_path = yaml_config.get("storage", {}).get("local_path", "assets")
+        storage_root = Path(storage_local_path).resolve()
+
+        # Resolve the target path relative to storage root
+        resolved = (storage_root / file_path).resolve()
+
+        # Path traversal check: ensure resolved path is within storage root
+        storage_root_str = str(storage_root)
+        resolved_str = str(resolved)
+        if not resolved_str.startswith(storage_root_str + os.sep) and resolved_str != storage_root_str:
+            return ToolResult(
+                success=False,
+                error="File path is outside the asset storage directory",
+            )
+
+        if not resolved.exists():
+            return ToolResult(success=False, error=f"File not found: {file_path}")
+
+        if not resolved.is_file():
+            return ToolResult(success=False, error=f"Not a file: {file_path}")
+
+        # Size check: 10MB max
+        file_size = resolved.stat().st_size
+        if file_size > 10 * 1024 * 1024:
+            return ToolResult(success=False, error="File too large (max 10MB)")
+
+        try:
+            content = resolved.read_text(encoding="utf-8")
+            return ToolResult(
+                success=True,
+                output=f"File read: {file_path} ({len(content)} chars)",
+                data={"content": content, "size": len(content), "path": file_path},
+            )
+        except UnicodeDecodeError:
+            return ToolResult(
+                success=True,
+                output=f"Binary file: {file_path} ({file_size} bytes)",
+                data={"content": "[binary file]", "size": file_size, "path": file_path},
+            )
+        except Exception as e:
+            logger.error("File read failed", error=str(e), path=file_path)
+            return ToolResult(
+                success=False,
+                error=f"Failed to read file: {str(e)}",
+            )
 
 
 class FileWriteTool(BaseTool):
@@ -355,12 +409,50 @@ class WebSearchTool(BaseTool):
     )
 
     async def execute(self, **kwargs) -> ToolResult:
-        query = kwargs.get("query", "")
-        return ToolResult(
-            success=True,
-            output=f"Search results for: {query}",
-            data={"results": []},
-        )
+        query = (kwargs.get("query") or "").strip()
+        max_results = kwargs.get("max_results", 5)
+
+        if not query:
+            return ToolResult(success=False, error="Empty search query")
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(
+                    "https://api.duckduckgo.com/",
+                    params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+                results = []
+                # AbstractText is the main result
+                if data.get("AbstractText"):
+                    results.append({
+                        "title": data.get("Heading", query),
+                        "snippet": data["AbstractText"],
+                        "url": data.get("AbstractURL", ""),
+                    })
+
+                # RelatedTopics for additional results
+                for topic in data.get("RelatedTopics", [])[:max_results]:
+                    if isinstance(topic, dict) and "Text" in topic:
+                        results.append({
+                            "title": topic.get("FirstURL", "").split("/")[-1].replace("_", " "),
+                            "snippet": topic["Text"],
+                            "url": topic.get("FirstURL", ""),
+                        })
+
+                return ToolResult(
+                    success=True,
+                    output=f"Found {len(results)} results for: {query}",
+                    data={"results": results},
+                )
+        except httpx.HTTPStatusError as e:
+            return ToolResult(success=False, error=f"Search API error: HTTP {e.response.status_code}")
+        except httpx.TimeoutException:
+            return ToolResult(success=False, error="Search request timed out")
+        except Exception as e:
+            return ToolResult(success=False, error=f"Search failed: {str(e)}")
 
 
 class CodeExecutionAuditTool(BaseTool):
