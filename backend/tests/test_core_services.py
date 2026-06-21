@@ -1033,6 +1033,142 @@ def test_get_sandbox_info(sb_manager):
     assert "timeout" in info
 
 
+# --- CodeExecutionTool Integration Tests (Task 2.5) ---
+
+from unittest.mock import AsyncMock, patch
+
+
+@pytest.mark.asyncio
+async def test_code_execution_empty_code(t_registry):
+    """Empty code should return an error."""
+    result = await t_registry.execute_tool("execute_code", code="")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_code_execution_whitespace_only(t_registry):
+    """Whitespace-only code should return an error."""
+    result = await t_registry.execute_tool("execute_code", code="   \n\t  ")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_code_execution_blocked_by_ast(t_registry):
+    """Code with blocked patterns should be rejected with audit info."""
+    result = await t_registry.execute_tool("execute_code", code="import pty\npty.spawn('/bin/bash')")
+    assert result.success is False
+    assert "blocked" in result.error.lower()
+    assert result.data is not None
+    assert "audit_findings" in result.data
+    assert result.data["risk_level"] == "blocked"
+    assert len(result.data["audit_findings"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_code_execution_successful(t_registry):
+    """Valid code should execute successfully and return output."""
+    from app.core.sandbox_manager import SandboxStatus, ExecutionResult
+
+    mock_result = ExecutionResult(
+        execution_id="test-exec-001",
+        status=SandboxStatus.COMPLETED,
+        stdout="hello world\n",
+        stderr="",
+        exit_code=0,
+        duration_ms=120,
+    )
+
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ):
+        result = await t_registry.execute_tool("execute_code", code="print('hello world')")
+
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["stdout"] == "hello world\n"
+    assert result.data["stderr"] == ""
+    assert result.data["exit_code"] == 0
+    assert result.data["execution_time_ms"] > 0
+    assert result.data["risk_level"] == "safe"
+    assert "audit_findings" not in result.data  # Safe code — no audit findings in result
+
+
+@pytest.mark.asyncio
+async def test_code_execution_warning_code_still_runs(t_registry):
+    """Code with warning-level patterns should still execute (risk included in result)."""
+    from app.core.sandbox_manager import SandboxStatus, ExecutionResult
+
+    mock_result = ExecutionResult(
+        execution_id="test-exec-002",
+        status=SandboxStatus.COMPLETED,
+        stdout="File opened\n",
+        stderr="",
+        exit_code=0,
+        duration_ms=90,
+    )
+
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ):
+        result = await t_registry.execute_tool(
+            "execute_code",
+            code="with open('test.txt') as f:\n    print(f.read())",
+        )
+
+    assert result.success is True
+    assert result.data["risk_level"] in ("warning", "dangerous")
+    assert "audit_findings" in result.data
+
+
+@pytest.mark.asyncio
+async def test_code_execution_sandbox_error(t_registry):
+    """Sandbox execution failure should return a graceful error."""
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Docker daemon not available"),
+    ):
+        result = await t_registry.execute_tool("execute_code", code="print('test')")
+
+    assert result.success is False
+    assert "sandbox execution error" in result.error.lower()
+    assert result.data is not None
+    assert "risk_level" in result.data
+
+
+@pytest.mark.asyncio
+async def test_code_execution_sandbox_nonzero_exit(t_registry):
+    """Code that runs but returns non-zero exit code should report failure."""
+    from app.core.sandbox_manager import SandboxStatus, ExecutionResult
+
+    mock_result = ExecutionResult(
+        execution_id="test-exec-003",
+        status=SandboxStatus.ERROR,
+        stdout="",
+        stderr="NameError: name 'foo' is not defined",
+        exit_code=1,
+        duration_ms=50,
+        error="NameError: name 'foo' is not defined",
+    )
+
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ):
+        result = await t_registry.execute_tool("execute_code", code="print(foo)")
+
+    assert result.success is False
+    assert result.data["exit_code"] == 1
+    assert "NameError" in result.data["stderr"]
+
+
 # --- RAG Engine Tests (M6) ---
 
 from app.core.rag_engine import (

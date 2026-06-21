@@ -137,11 +137,69 @@ class CodeExecutionTool(BaseTool):
 
     async def execute(self, **kwargs) -> ToolResult:
         code = kwargs.get("code", "")
-        # Placeholder: actual Docker sandbox execution in M7
+        language = kwargs.get("language", "python")
+
+        # Validate code is non-empty
+        if not code or not code.strip():
+            return ToolResult(
+                success=False,
+                error="Code cannot be empty.",
+            )
+
+        import time as _time
+        from app.core.sandbox_manager import ASTAnalyzer, ExecutionRisk, sandbox_manager
+
+        # Run AST security audit
+        risk, findings = ASTAnalyzer.analyze(code)
+
+        # Blocked code — return error with audit details
+        if risk == ExecutionRisk.BLOCKED:
+            return ToolResult(
+                success=False,
+                error=f"Code blocked by security audit: {'; '.join(findings)}",
+                data={
+                    "risk_level": risk.value,
+                    "audit_findings": findings,
+                },
+            )
+
+        # Execute in Docker sandbox
+        try:
+            start = _time.monotonic()
+            exec_result = await sandbox_manager.execute(code, language=language)
+            elapsed_ms = int((_time.monotonic() - start) * 1000)
+        except Exception as e:
+            logger.error("Sandbox execution failed", error=str(e))
+            return ToolResult(
+                success=False,
+                error=f"Sandbox execution error: {str(e)}",
+                data={
+                    "risk_level": risk.value,
+                    "audit_findings": findings,
+                },
+            )
+
+        # Build result data
+        result_data = {
+            "stdout": exec_result.stdout or "",
+            "stderr": exec_result.stderr or "",
+            "exit_code": exec_result.exit_code,
+            "execution_time_ms": elapsed_ms if elapsed_ms > 0 else exec_result.duration_ms,
+            "risk_level": risk.value,
+            "execution_id": exec_result.execution_id,
+        }
+
+        # Include audit findings for non-safe code
+        if risk != ExecutionRisk.SAFE:
+            result_data["audit_findings"] = findings
+
+        success = exec_result.status.value == "completed"
+
         return ToolResult(
-            success=True,
-            output=f"Code execution result for: {code[:50]}...",
-            data={"stdout": "Execution simulated", "stderr": ""},
+            success=success,
+            output=exec_result.stdout or exec_result.error or "",
+            error=exec_result.error if not success else exec_result.stderr if exec_result.stderr else None,
+            data=result_data,
         )
 
 
