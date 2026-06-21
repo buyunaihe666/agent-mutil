@@ -843,7 +843,7 @@ import httpx
 @pytest.mark.asyncio
 async def test_web_search_empty_query(t_registry):
     """Empty query should return error."""
-    result = await t_registry.execute_tool("search_web", query="")
+    result = await t_registry.execute_tool("web_search", query="")
     assert result.success is False
     assert "empty" in result.error.lower()
 
@@ -875,7 +875,7 @@ async def test_web_search_success(t_registry):
     mock_client.get = AsyncMock(return_value=mock_response)
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        result = await t_registry.execute_tool("search_web", query="Python")
+        result = await t_registry.execute_tool("web_search", query="Python")
 
     assert result.success is True
     assert "Found" in result.output
@@ -904,7 +904,7 @@ async def test_web_search_no_results(t_registry):
     mock_client.get = AsyncMock(return_value=mock_response)
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        result = await t_registry.execute_tool("search_web", query="xyznonexistent12345")
+        result = await t_registry.execute_tool("web_search", query="xyznonexistent12345")
 
     assert result.success is True
     assert result.data["results"] == []
@@ -924,7 +924,7 @@ async def test_web_search_http_error(t_registry):
     ))
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        result = await t_registry.execute_tool("search_web", query="test")
+        result = await t_registry.execute_tool("web_search", query="test")
 
     assert result.success is False
     assert "HTTP 500" in result.error
@@ -939,7 +939,7 @@ async def test_web_search_timeout(t_registry):
     mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Request timed out"))
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        result = await t_registry.execute_tool("search_web", query="test")
+        result = await t_registry.execute_tool("web_search", query="test")
 
     assert result.success is False
     assert "timed out" in result.error.lower()
@@ -954,7 +954,7 @@ async def test_web_search_network_error(t_registry):
     mock_client.get = AsyncMock(side_effect=Exception("Network unreachable"))
 
     with patch("httpx.AsyncClient", return_value=mock_client):
-        result = await t_registry.execute_tool("search_web", query="test")
+        result = await t_registry.execute_tool("web_search", query="test")
 
     assert result.success is False
     assert "Network unreachable" in result.error

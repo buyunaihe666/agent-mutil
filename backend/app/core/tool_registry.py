@@ -488,18 +488,30 @@ class WebSearchTool(BaseTool):
         category=ToolCategory.WEB_SEARCH,
         permission=ToolPermission.AUTO,
         function_definition=FunctionDefinition(
-            name="search_web",
-            description="Search the web for information.",
+            name="web_search",
+            description="Search the web for information on any topic. Returns structured results with titles, URLs, and snippets.",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search query.",
+                        "description": "Search query / keywords",
                     },
-                    "max_results": {
+                    "num_results": {
                         "type": "integer",
-                        "description": "Maximum number of results to return. Default 5.",
+                        "description": "Number of results to return (1-20, default 5)",
+                        "default": 5,
+                    },
+                    "search_type": {
+                        "type": "string",
+                        "enum": ["web", "news"],
+                        "description": "Type of search: web (general web) or news",
+                        "default": "web",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Language preference for results, e.g. zh-CN, en-US",
+                        "default": "zh-CN",
                     },
                 },
                 "required": ["query"],
@@ -509,50 +521,71 @@ class WebSearchTool(BaseTool):
         tags=["search", "web", "internet"],
     )
 
-    async def execute(self, **kwargs) -> ToolResult:
-        query = (kwargs.get("query") or "").strip()
-        max_results = kwargs.get("max_results", 5)
-
-        if not query:
+    async def execute(
+        self,
+        query: str,
+        num_results: int = 5,
+        search_type: str = "web",
+        language: str = "zh-CN",
+        **kwargs: Any,
+    ) -> ToolResult:
+        """Execute a web search query."""
+        if not query or not query.strip():
             return ToolResult(success=False, error="Empty search query")
 
         try:
+            num_results = max(1, min(20, num_results))
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
+                response = await client.get(
                     "https://api.duckduckgo.com/",
-                    params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1},
+                    params={
+                        "q": query,
+                        "format": "json",
+                        "no_html": 1,
+                        "skip_disambig": 1,
+                        "kl": language.replace("-", "_") if language else "zh_CN",
+                    },
                 )
-                resp.raise_for_status()
-                data = resp.json()
+                response.raise_for_status()
+                data = response.json()
 
                 results = []
-                # AbstractText is the main result
+                # Main result
                 if data.get("AbstractText"):
                     results.append({
                         "title": data.get("Heading", query),
                         "snippet": data["AbstractText"],
                         "url": data.get("AbstractURL", ""),
+                        "source": data.get("AbstractSource", "DuckDuckGo"),
                     })
 
-                # RelatedTopics for additional results
-                for topic in data.get("RelatedTopics", [])[:max_results]:
-                    if isinstance(topic, dict) and "Text" in topic:
+                # Related topics
+                for topic in data.get("RelatedTopics", []):
+                    if topic.get("Text"):
                         results.append({
-                            "title": topic.get("FirstURL", "").split("/")[-1].replace("_", " "),
+                            "title": topic.get("FirstURL", "").split("/")[-1].replace("_", " ") or query,
                             "snippet": topic["Text"],
                             "url": topic.get("FirstURL", ""),
+                            "source": "DuckDuckGo",
                         })
+                    if len(results) >= num_results:
+                        break
 
                 return ToolResult(
                     success=True,
-                    output=f"Found {len(results)} results for: {query}",
-                    data={"results": results},
+                    output=f"Found {len(results)} results for '{query}'.",
+                    data={
+                        "results": results[:num_results],
+                        "total_found": len(results),
+                        "search_engine": "DuckDuckGo",
+                    },
                 )
-        except httpx.HTTPStatusError as e:
-            return ToolResult(success=False, error=f"Search API error: HTTP {e.response.status_code}")
         except httpx.TimeoutException:
             return ToolResult(success=False, error="Search request timed out")
+        except httpx.HTTPStatusError as e:
+            return ToolResult(success=False, error=f"Search API error: HTTP {e.response.status_code}")
         except Exception as e:
+            logger.error("Web search failed", error=str(e))
             return ToolResult(success=False, error=f"Search failed: {str(e)}")
 
 
