@@ -103,6 +103,27 @@ export function t(key: string, fallback?: string): string {
     "common.search": "搜索...",
     "common.filter": "筛选",
     "common.more": "更多",
+
+    // Voice input
+    "voice.notSupported": "浏览器不支持语音识别",
+    "voice.recording": "录音中...",
+    "voice.tapToStop": "点击停止录音",
+    "voice.timeout": "录音超时 (60秒)",
+    "voice.noSpeech": "未检测到语音",
+    "voice.permissionDenied": "麦克风权限被拒绝",
+    "voice.networkError": "网络错误",
+
+    // Meta-Agent layers
+    "metaAgent.decision": "智能决策",
+    "metaAgent.strategy": "策略规划",
+    "metaAgent.execution": "执行调度",
+    "metaAgent.layerDecision": "决策层",
+    "metaAgent.layerStrategy": "策略层",
+    "metaAgent.layerExecution": "执行层",
+    "metaAgent.layerReview": "审查",
+    "metaAgent.analyzing": "正在分析意图...",
+    "metaAgent.planning": "正在制定计划...",
+    "metaAgent.dispatching": "正在分配任务...",
   };
 
   return translations[key] ?? fallback ?? key;

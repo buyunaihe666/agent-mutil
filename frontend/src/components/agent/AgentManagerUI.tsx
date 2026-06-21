@@ -20,7 +20,7 @@ import {
 } from "@/features/agent/agentSlice";
 import { t } from "@/i18n";
 import type { AppDispatch, RootState } from "@/store";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 
 interface AgentManagerUIProps {
@@ -79,6 +79,11 @@ function AgentCard({
               {!agent.is_active && (
                 <span className="text-[10px] bg-gray-100 dark:bg-gray-700 text-gray-500 px-1 py-0.5 rounded">
                   Inactive
+                </span>
+              )}
+              {agent.is_meta && (
+                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-purple-100 text-purple-700 rounded-full">
+                  Meta
                 </span>
               )}
             </div>
@@ -155,6 +160,7 @@ function AgentEditor({
   const [model, setModel] = useState(agent?.default_model ?? "deepseek-chat");
   const [level, setLevel] = useState(agent?.permission_level ?? 1);
   const [temperature, setTemperature] = useState(agent?.temperature ?? 0.7);
+  const [isMeta, setIsMeta] = useState(!!agent?.is_meta);
 
   return (
     <div className="border rounded-lg p-6 bg-white dark:bg-gray-800 space-y-4">
@@ -250,6 +256,21 @@ function AgentEditor({
         </div>
       </div>
 
+      {/* Meta-Agent checkbox */}
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id="is_meta"
+          checked={isMeta}
+          onChange={(e) => setIsMeta(e.target.checked)}
+          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        <label htmlFor="is_meta" className="text-sm text-gray-700 cursor-pointer">
+          Meta-Agent (调度者)
+        </label>
+        <span className="text-[10px] text-gray-400">仅调度其他Agent，不直接执行工具</span>
+      </div>
+
       <div className="flex gap-2 justify-end">
         <button
           type="button"
@@ -268,6 +289,7 @@ function AgentEditor({
               default_model: model,
               permission_level: level,
               temperature,
+              is_meta: isMeta,
             })
           }
           className="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700"
@@ -558,6 +580,7 @@ const MOCK_AGENTS: AgentData[] = [
     permission_level: 4,
     is_preset: true,
     is_active: true,
+    is_meta: true,
     tools: ["file_read", "agent_communication"],
     default_model: "deepseek-chat",
     temperature: 0.3,
@@ -705,6 +728,25 @@ export function AgentManagerUI({ variant = "full" }: AgentManagerUIProps) {
     templates: templatesFromStore,
     versionHistory,
   } = useSelector((state: RootState) => state.agent);
+
+  // Fetch agents from backend API on mount to get real UUIDs
+  useEffect(() => {
+    if (agentsFromStore.length > 0) return;
+    const fetchAgents = async () => {
+      try {
+        const response = await fetch("/api/agents");
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.length > 0) {
+            dispatch(setAgents(data));
+          }
+        }
+      } catch {
+        // Silently fail — fallback to mock data
+      }
+    };
+    fetchAgents();
+  }, [dispatch, agentsFromStore.length]);
 
   const [showVersions, setShowVersions] = useState<string | null>(null);
 

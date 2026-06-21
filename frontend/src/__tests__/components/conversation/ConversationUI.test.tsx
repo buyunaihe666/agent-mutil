@@ -43,6 +43,11 @@ describe("ConversationUI", () => {
           messages: {},
           isLoading: false,
           error: null,
+          meta_agent_state: {
+            current_layer: null,
+            layer_history: [],
+            triage_result: null,
+          },
         },
       },
     });
@@ -112,6 +117,11 @@ describe("ConversationUI", () => {
           },
           isLoading: false,
           error: null,
+          meta_agent_state: {
+            current_layer: null,
+            layer_history: [],
+            triage_result: null,
+          },
         },
       },
     });
@@ -144,6 +154,11 @@ describe("ConversationUI", () => {
             messages: {},
             isLoading: false,
             error: null,
+            meta_agent_state: {
+              current_layer: null,
+              layer_history: [],
+              triage_result: null,
+            },
           },
         },
       });
