@@ -248,6 +248,31 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_parallel_count": 5,
         "agent_timeout": 300,
         "step_retry_count": 2,
+        "recover_on_startup": True,
+        "auto_approve_plans": True,  # Backward compatible: existing orchestrators auto-execute
+    },
+
+    "meta_agents": {
+        "enabled": True,
+        "decision_agent": "智能决策",
+        "strategy_agent": "策略规划",
+        "execution_agent": "执行调度",
+        "triage_auto_fallback": True,
+        "approval_timeout_seconds": 300,
+        "review_enabled": True,
+    },
+
+    "web_search": {
+        "default_engine": "duckduckgo",
+        "timeout_seconds": 15,
+        "max_results": 20,
+        "engines": {
+            "duckduckgo": {
+                "url": "https://api.duckduckgo.com/",
+                "free": True,
+                "requires_api_key": False,
+            },
+        },
     },
 }
 
