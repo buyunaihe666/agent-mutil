@@ -1,6 +1,43 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Mic, Square } from "lucide-react";
 
+// Web Speech API type declarations (not in standard TS lib)
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+}
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+type SpeechRecognitionResult = SpeechRecognitionAlternative[];
+type SpeechRecognitionResultList = SpeechRecognitionResult[];
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognition;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
 interface VoiceInputProps {
   onTranscription: (text: string) => void;
 }
@@ -10,14 +47,12 @@ export function VoiceInput({ onTranscription }: VoiceInputProps) {
   const [isSupported, setIsSupported] = useState(true);
   const [interimText, setInterimText] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const recognitionRef = useRef<InstanceType<typeof SpeechRecognition> | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Feature detection
   useEffect(() => {
-    const SpeechRecognitionCtor =
-      (window as Record<string, unknown>).SpeechRecognition ||
-      (window as Record<string, unknown>).webkitSpeechRecognition;
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) {
       setIsSupported(false);
     }
@@ -33,26 +68,23 @@ export function VoiceInput({ onTranscription }: VoiceInputProps) {
   }, []);
 
   const startRecording = useCallback(() => {
-    const SpeechRecognitionCtor =
-      (window as Record<string, unknown>).SpeechRecognition ||
-      (window as Record<string, unknown>).webkitSpeechRecognition;
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) {
       setIsSupported(false);
       return;
     }
 
-    const Recognition = SpeechRecognitionCtor as typeof SpeechRecognition;
-    const recognition = new Recognition();
+    const recognition = new SpeechRecognitionCtor();
     recognition.lang = "zh-CN";
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = Array.from(event.results)
-        .map((r) => (r[0] as SpeechRecognitionAlternative).transcript)
+        .map((r) => r[0]?.transcript ?? "")
         .join("");
       setInterimText(transcript);
-      if (event.results[0]?.isFinal) {
+      if (event.results[0]?.[0] && event.results[event.results.length - 1]?.[0]?.confidence > 0) {
         onTranscription(transcript);
         setInterimText("");
         stopRecording();
@@ -74,7 +106,7 @@ export function VoiceInput({ onTranscription }: VoiceInputProps) {
       setIsRecording(false);
     };
 
-    recognitionRef.current = recognition as unknown as InstanceType<typeof SpeechRecognition>;
+    recognitionRef.current = recognition;
     recognition.start();
 
     // Auto-stop after 60s

@@ -6,7 +6,7 @@ import { VoiceInput } from "../../../components/conversation/VoiceInput";
 const mockStart = vi.fn();
 const mockStop = vi.fn();
 
-class MockSpeechRecognition {
+class MockSpeechRecognition extends EventTarget {
   continuous = false;
   interimResults = false;
   lang = "";
@@ -22,12 +22,13 @@ class MockSpeechRecognition {
 describe("VoiceInput", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete (window as Record<string, unknown>).SpeechRecognition;
-    delete (window as Record<string, unknown>).webkitSpeechRecognition;
+    delete window.SpeechRecognition;
+    delete window.webkitSpeechRecognition;
   });
 
   it("renders mic button when SpeechRecognition is supported", () => {
-    (window as Record<string, unknown>).SpeechRecognition = MockSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    window.SpeechRecognition = MockSpeechRecognition as any;
     const onTranscription = vi.fn();
     render(<VoiceInput onTranscription={onTranscription} />);
     expect(screen.getByRole("button")).toBeDefined();
@@ -40,7 +41,8 @@ describe("VoiceInput", () => {
   });
 
   it("starts recording on mic button click", () => {
-    (window as Record<string, unknown>).SpeechRecognition = MockSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    window.SpeechRecognition = MockSpeechRecognition as any;
     const onTranscription = vi.fn();
     render(<VoiceInput onTranscription={onTranscription} />);
     fireEvent.click(screen.getByRole("button"));
@@ -48,7 +50,8 @@ describe("VoiceInput", () => {
   });
 
   it("stops recording on second click", () => {
-    (window as Record<string, unknown>).SpeechRecognition = MockSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    window.SpeechRecognition = MockSpeechRecognition as any;
     const onTranscription = vi.fn();
     render(<VoiceInput onTranscription={onTranscription} />);
     fireEvent.click(screen.getByRole("button")); // start
@@ -58,7 +61,8 @@ describe("VoiceInput", () => {
   });
 
   it("supports webkitSpeechRecognition fallback", () => {
-    (window as Record<string, unknown>).webkitSpeechRecognition = MockSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    window.webkitSpeechRecognition = MockSpeechRecognition as any;
     const onTranscription = vi.fn();
     render(<VoiceInput onTranscription={onTranscription} />);
     expect(screen.getByRole("button")).toBeDefined();
