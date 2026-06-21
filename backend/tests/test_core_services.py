@@ -973,7 +973,11 @@ from app.core.sandbox_manager import (
 
 @pytest.fixture
 def sb_manager():
-    return SandboxManager()
+    mgr = SandboxManager()
+    # Force mock execution — tests must not depend on Docker availability
+    mgr._docker_available = False
+    mgr._docker_client = None
+    return mgr
 
 
 def test_ast_analyze_safe_code():
