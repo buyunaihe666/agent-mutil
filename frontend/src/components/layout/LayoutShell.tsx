@@ -7,7 +7,7 @@ import { MonitorPanel } from "@/components/monitor/MonitorPanel";
 import { t } from "@/i18n";
 import { Circle, Maximize2, Minus, PanelLeft, PanelRight, Square } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 
 const leftTabs = [
   { id: "conversations", label: t("nav.conversations") },
@@ -34,6 +34,24 @@ function tabClass(active: boolean) {
 export function LayoutShell() {
   const [leftTab, setLeftTab] = useState<LeftTab>("conversations");
   const [rightTab, setRightTab] = useState<RightTab>("performance");
+  const location = useLocation();
+
+  // Sync tabs with current route
+  useEffect(() => {
+    const path = location.pathname;
+    if (path.startsWith("/assets")) {
+      setLeftTab("assets");
+      setRightTab("performance");
+    } else if (path.startsWith("/agents")) {
+      setRightTab("agent");
+    } else if (path.startsWith("/monitor")) {
+      setRightTab("performance");
+    } else {
+      // Default routes (/, /conversations)
+      setLeftTab("conversations");
+      setRightTab("performance");
+    }
+  }, [location.pathname]);
 
   const handleLeftTab = (tab: LeftTab) => {
     setLeftTab(tab);
