@@ -23,6 +23,20 @@ class MessageType(str, Enum):
     AGENT_STATUS = "agent_status"
     TOOL_CALL_START = "tool_call_start"
     TOOL_CALL_RESULT = "tool_call_result"
+    PLAN_CREATED = "plan_created"
+    PLAN_AWAITING_APPROVAL = "plan_awaiting_approval"
+    PLAN_APPROVED = "plan_approved"        # client -> server
+    PLAN_REJECTED = "plan_rejected"        # client -> server
+    PLAN_UPDATED = "plan_updated"
+    STEP_STARTED = "step_started"
+    STEP_COMPLETED = "step_completed"
+    STEP_FAILED = "step_failed"
+    EXECUTION_PAUSED = "execution_paused"
+    EXECUTION_RESUMED = "execution_resumed"
+    EXECUTION_CANCELLED = "execution_cancelled"
+    RETRY_STEP = "retry_step"              # client -> server
+    AGENT_ACTIVITY = "agent_activity"
+    AUDIT_EVENTS = "audit_events"
     SYSTEM = "system"
     CONFIRM_ACTION = "confirm_action"
     CONTROL = "control"
@@ -32,6 +46,13 @@ class MessageType(str, Enum):
     HARDWARE_STATS = "hardware_stats"
     CONTAINER_STATS = "container_stats"
 
+    # Meta-Agent 分层消息
+    META_AGENT_STARTED = "meta_agent_started"         # Meta-Agent 开始工作
+    META_AGENT_COMPLETED = "meta_agent_completed"     # Meta-Agent 完成工作
+    META_AGENT_DISPATCH = "meta_agent_dispatch"       # 执行Agent派发step
+    TRIAGE_RESULT = "triage_result"                   # 决策Agent复杂度判断
+    LAYER_TRANSITION = "layer_transition"             # 层级切换
+    PLAN_SAVED = "plan_saved"                         # Plan 已保存(供审批)
 
 class ControlAction(str, Enum):
     PAUSE = "pause"

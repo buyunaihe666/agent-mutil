@@ -10,6 +10,7 @@ export interface AgentData {
   permission_level: number;
   is_preset: boolean;
   is_active: boolean;
+  is_meta?: boolean;
   tools?: string[];
   default_model: string;
   temperature: number;

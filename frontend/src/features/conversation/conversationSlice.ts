@@ -10,6 +10,21 @@ export interface Conversation {
   updated_at: string;
 }
 
+// Meta-Agent layer state
+export interface MetaAgentLayerState {
+  current_layer: "decision" | "strategy" | "execution" | "strategy_review" | null;
+  layer_history: { layer: string; agent_name: string; timestamp: string }[];
+  triage_result: { complexity: "simple" | "complex"; reasoning: string } | null;
+}
+
+export interface MetaAgentActivity {
+  plan_id?: string;
+  layer: string;
+  agent_name: string;
+  status: "started" | "completed" | "error";
+  data?: Record<string, unknown>;
+}
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -20,6 +35,27 @@ export interface ToolCall {
   status: "pending" | "running" | "complete" | "error";
 }
 
+export interface PlanStep {
+  step_id: string;
+  description: string;
+  agent_name: string;
+  agent_emoji: string;
+  status: "pending" | "running" | "completed" | "failed" | "skipped";
+  output?: string;
+  error?: string;
+  retry_count?: number;
+}
+
+export interface OrchestrationPlan {
+  plan_id: string;
+  title: string;
+  status: "pending" | "awaiting_approval" | "running" | "paused" | "completed" | "failed" | "cancelled";
+  steps: PlanStep[];
+  parallel_groups?: string[][];
+  meta_agent_layers?: string[];
+  triage_result?: { complexity: "simple" | "complex"; reasoning: string };
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "agent";
@@ -28,15 +64,17 @@ export interface Message {
   agent_name?: string;
   agent_emoji?: string;
   tool_calls?: ToolCall[];
+  plan?: OrchestrationPlan;
   created_at: string;
 }
 
 interface ConversationState {
   conversations: Conversation[];
   activeConversationId: string | null;
-  messages: Record<string, Message[]>; // conversationId -> messages
+  messages: Record<string, Message[]>;
   isLoading: boolean;
   error: string | null;
+  meta_agent_state: MetaAgentLayerState;
 }
 
 const initialState: ConversationState = {
@@ -45,6 +83,11 @@ const initialState: ConversationState = {
   messages: {},
   isLoading: false,
   error: null,
+  meta_agent_state: {
+    current_layer: null,
+    layer_history: [],
+    triage_result: null,
+  },
 };
 
 export const conversationSlice = createSlice({
@@ -204,11 +247,145 @@ export const conversationSlice = createSlice({
         }
       }
     },
+    createPlan: (
+      state,
+      action: PayloadAction<{
+        conversationId: string;
+        plan: OrchestrationPlan;
+        messageId?: string;
+      }>,
+    ) => {
+      const { conversationId, plan, messageId } = action.payload;
+      if (!state.messages[conversationId]) {
+        state.messages[conversationId] = [];
+      }
+      const msgs = state.messages[conversationId];
+      // Find the target message or create a new assistant message
+      let target = messageId ? msgs.find((m) => m.id === messageId) : undefined;
+      if (!target) {
+        target = [...msgs].reverse().find((m) => m.role === "assistant");
+      }
+      if (target) {
+        target.plan = plan;
+      } else {
+        // Create a new assistant message to hold the plan
+        const newMsg: Message = {
+          id: messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          role: "assistant",
+          content: "",
+          plan: plan,
+          created_at: new Date().toISOString(),
+        };
+        msgs.push(newMsg);
+      }
+    },
+    updatePlanStep: (
+      state,
+      action: PayloadAction<{
+        conversationId: string;
+        stepId: string;
+        updates: Partial<PlanStep>;
+      }>,
+    ) => {
+      const { conversationId, stepId, updates } = action.payload;
+      const msgs = state.messages[conversationId];
+      if (!msgs) return;
+      for (const msg of msgs) {
+        if (msg.plan) {
+          const step = msg.plan.steps.find((s) => s.step_id === stepId);
+          if (step) {
+            Object.assign(step, updates);
+            return;
+          }
+        }
+      }
+    },
     setLoading: (state, action: PayloadAction<boolean>) => {
       state.isLoading = action.payload;
     },
     setError: (state, action: PayloadAction<string | null>) => {
       state.error = action.payload;
+    },
+    // Meta-Agent reducers
+    setMetaAgentLayer: (state, action: PayloadAction<{ layer: string; agent_name: string }>) => {
+      state.meta_agent_state.current_layer = action.payload.layer as MetaAgentLayerState["current_layer"];
+      state.meta_agent_state.layer_history.push({
+        layer: action.payload.layer,
+        agent_name: action.payload.agent_name,
+        timestamp: new Date().toISOString(),
+      });
+    },
+
+    clearMetaAgentLayer: (state) => {
+      state.meta_agent_state.current_layer = null;
+    },
+
+    setTriageResult: (state, action: PayloadAction<{ complexity: "simple" | "complex"; reasoning: string }>) => {
+      state.meta_agent_state.triage_result = action.payload;
+    },
+
+    updatePlanMetaLayers: (state, action: PayloadAction<{ planId: string; layers: string[] }>) => {
+      const { planId, layers } = action.payload;
+      for (const convId of Object.keys(state.messages)) {
+        const msgs = state.messages[convId];
+        if (!msgs) continue;
+        for (const msg of msgs) {
+          if (msg.plan?.plan_id === planId) {
+            msg.plan.meta_agent_layers = layers;
+          }
+        }
+      }
+    },
+
+    updatePlanTriageResult: (state, action: PayloadAction<{
+      planId: string; triage: { complexity: "simple" | "complex"; reasoning: string };
+    }>) => {
+      const { planId, triage } = action.payload;
+      for (const convId of Object.keys(state.messages)) {
+        const msgs = state.messages[convId];
+        if (!msgs) continue;
+        for (const msg of msgs) {
+          if (msg.plan?.plan_id === planId) {
+            msg.plan.triage_result = triage;
+          }
+        }
+      }
+    },
+    updatePlan: (
+      state,
+      action: PayloadAction<{
+        conversationId: string;
+        planId: string;
+        updates: Partial<OrchestrationPlan>;
+      }>,
+    ) => {
+      const { conversationId, planId, updates } = action.payload;
+      const msgs = state.messages[conversationId];
+      if (!msgs) return;
+      for (const msg of msgs) {
+        if (msg.plan && msg.plan.plan_id === planId) {
+          Object.assign(msg.plan, updates);
+          return;
+        }
+      }
+    },
+    updatePlanStatus: (
+      state,
+      action: PayloadAction<{
+        conversationId: string;
+        planId: string;
+        status: OrchestrationPlan["status"];
+      }>,
+    ) => {
+      const { conversationId, planId, status } = action.payload;
+      const msgs = state.messages[conversationId];
+      if (!msgs) return;
+      for (const msg of msgs) {
+        if (msg.plan && msg.plan.plan_id === planId) {
+          msg.plan.status = status;
+          return;
+        }
+      }
     },
   },
 });
@@ -226,8 +403,17 @@ export const {
   finalizeAgentMessage,
   addToolCall,
   updateToolCall,
+  createPlan,
+  updatePlanStep,
+  updatePlan,
+  updatePlanStatus,
   setLoading,
   setError,
+  setMetaAgentLayer,
+  clearMetaAgentLayer,
+  setTriageResult,
+  updatePlanMetaLayers,
+  updatePlanTriageResult,
 } = conversationSlice.actions;
 
 export default conversationSlice.reducer;

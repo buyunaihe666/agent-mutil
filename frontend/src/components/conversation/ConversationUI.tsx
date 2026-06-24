@@ -23,7 +23,6 @@ import {
   ArrowRight,
   FileImage,
   MessageCircle,
-  Mic,
   Paperclip,
   Pin,
   Plus,
@@ -35,6 +34,7 @@ import {
 import { type KeyboardEvent, useRef, useState, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { VoiceInput } from "./VoiceInput";
 
 let idCounter = 0;
 
@@ -421,6 +421,10 @@ function ChatInput({ onSend }: { onSend: (content: string) => void }) {
     }
   };
 
+  const handleVoiceTranscription = (text: string) => {
+    setValue((prev) => (prev ? prev + " " + text : text));
+  };
+
   const handleFileAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
@@ -449,13 +453,8 @@ function ChatInput({ onSend }: { onSend: (content: string) => void }) {
             onClick={() => imageInputRef.current?.click()}
           />
         </span>
-        <span title="语音输入 (即将上线)">
-          <Mic
-            aria-hidden="true"
-            size={17}
-            className="text-gray-300 cursor-not-allowed"
-          />
-        </span>
+        {/* VoiceInput replaces disabled Mic */}
+        <VoiceInput onTranscription={handleVoiceTranscription} />
         <span title="实时广播 (即将上线)">
           <Radio
             aria-hidden="true"

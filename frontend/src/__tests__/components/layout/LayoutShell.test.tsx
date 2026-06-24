@@ -1,8 +1,9 @@
 import { renderWithProviders } from "@/__tests__/test-utils";
 import { LayoutShell } from "@/components/layout/LayoutShell";
-import { fireEvent, screen } from "@testing-library/react";
+import { ConversationUI } from "@/components/conversation/ConversationUI";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Route, Routes, useNavigate } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
 function RouteDriver({ to }: { to: string }) {
@@ -41,22 +42,30 @@ describe("LayoutShell", () => {
     expect(screen.getByText("sales_report.csv")).toBeInTheDocument();
   });
 
-  it("renders center conversation workspace", () => {
-    renderWithProviders(<LayoutShell />);
+  it("renders center conversation workspace empty state", () => {
+    renderWithProviders(
+      <Routes>
+        <Route element={<LayoutShell />}>
+          <Route index element={<ConversationUI />} />
+        </Route>
+      </Routes>,
+      { initialRoute: "/" },
+    );
 
-    expect(screen.getByText(/建议：建议主攻/)).toBeInTheDocument();
-    expect(screen.getByText("spider_probe_server.py")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("输入您的问题...")).toBeInTheDocument();
+    expect(screen.getByText("没有对话")).toBeInTheDocument();
+    expect(screen.getByText("点击左侧「新建对话」按钮开始")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "新建对话" }).length).toBeGreaterThan(0);
   });
 
   it("renders right workspace tabs and switches to Agent", () => {
     renderWithProviders(<LayoutShell />);
 
-    expect(screen.getByRole("tab", { name: "性能" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "安全" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Agent" })).toBeInTheDocument();
+    const rightTablist = screen.getByRole("tablist", { name: "右侧工作区" });
+    expect(within(rightTablist).getByRole("tab", { name: "性能" })).toBeInTheDocument();
+    expect(within(rightTablist).getByRole("tab", { name: "安全" })).toBeInTheDocument();
+    expect(within(rightTablist).getByRole("tab", { name: "Agent" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    fireEvent.click(within(rightTablist).getByRole("tab", { name: "Agent" }));
 
     expect(screen.getByText("数字主管")).toBeInTheDocument();
     expect(screen.getByText("风控顾问")).toBeInTheDocument();
@@ -103,8 +112,9 @@ describe("LayoutShell", () => {
   it("activates agent tab from /agents route", () => {
     renderWithProviders(<LayoutShell />, { initialRoute: "/agents" });
 
-    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "性能" })).toHaveAttribute("aria-selected", "false");
+    const rightTablist = screen.getByRole("tablist", { name: "右侧工作区" });
+    expect(within(rightTablist).getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
+    expect(within(rightTablist).getByRole("tab", { name: "性能" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByText("数字主管")).toBeInTheDocument();
     expect(screen.getByText("风控顾问")).toBeInTheDocument();
   });
@@ -118,7 +128,8 @@ describe("LayoutShell", () => {
       { initialRoute: "/agents" },
     );
 
-    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
+    const rightTablist = screen.getByRole("tablist", { name: "右侧工作区" });
+    expect(within(rightTablist).getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
 
     rerender(
       <>
@@ -127,15 +138,17 @@ describe("LayoutShell", () => {
       </>,
     );
 
-    expect(screen.getByRole("tab", { name: "性能" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "false");
+    const rightTablistAfter = screen.getByRole("tablist", { name: "右侧工作区" });
+    expect(within(rightTablistAfter).getByRole("tab", { name: "性能" })).toHaveAttribute("aria-selected", "true");
+    expect(within(rightTablistAfter).getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "false");
   });
 
   it("activates performance tab from /monitor route", () => {
     renderWithProviders(<LayoutShell />, { initialRoute: "/monitor" });
 
-    expect(screen.getByRole("tab", { name: "性能" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "false");
+    const rightTablist = screen.getByRole("tablist", { name: "右侧工作区" });
+    expect(within(rightTablist).getByRole("tab", { name: "性能" })).toHaveAttribute("aria-selected", "true");
+    expect(within(rightTablist).getByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "false");
     expect(screen.getByText("硬件监控")).toBeInTheDocument();
     expect(screen.getByText("GPU显存")).toBeInTheDocument();
   });

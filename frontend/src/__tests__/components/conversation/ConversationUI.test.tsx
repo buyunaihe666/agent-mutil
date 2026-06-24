@@ -5,29 +5,24 @@ import {
   ConversationWorkspace,
 } from "@/components/conversation/ConversationUI";
 import type { Message } from "@/features/conversation/conversationSlice";
-import { t } from "@/i18n";
 import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 describe("ConversationUI", () => {
-  it("renders the full conversation workspace", () => {
+  it("renders the conversation workspace empty state when no active conversation", () => {
     renderWithProviders(<ConversationUI />);
 
-    expect(screen.getByText("置顶空间")).toBeInTheDocument();
-    expect(screen.getByText("活跃会话")).toBeInTheDocument();
-    expect(screen.getByText(/建议：建议主攻/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("输入您的问题...")).toBeInTheDocument();
+    expect(screen.getByText("没有对话")).toBeInTheDocument();
+    expect(screen.getByText("点击左侧「新建对话」按钮开始")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "新建对话" })).toBeInTheDocument();
   });
 
-  it("renders conversation sidebar with full fallback conversation list", () => {
+  it("renders conversation sidebar with empty state when no conversations", () => {
     renderWithProviders(<ConversationSidebar />);
 
     expect(screen.getByRole("button", { name: /新建对话/ })).toBeInTheDocument();
-    expect(screen.getByText("置顶空间")).toBeInTheDocument();
-    expect(screen.getByText("数据分析任务示例")).toBeInTheDocument();
-    expect(screen.getByText("代码审查讨论")).toBeInTheDocument();
-    expect(screen.getByText("年度财报数据处理")).toBeInTheDocument();
-    expect(screen.getByText("用户偏好特征对齐")).toBeInTheDocument();
+    expect(screen.getByText("暂无会话")).toBeInTheDocument();
+    expect(screen.getByText("点击上方「新建对话」开始")).toBeInTheDocument();
   });
 
   it("uses Redux conversations instead of fallback conversation titles", () => {
@@ -48,6 +43,11 @@ describe("ConversationUI", () => {
           messages: {},
           isLoading: false,
           error: null,
+          meta_agent_state: {
+            current_layer: null,
+            layer_history: [],
+            triage_result: null,
+          },
         },
       },
     });
@@ -84,23 +84,51 @@ describe("ConversationUI", () => {
     }
   });
 
-  it("renders prototype task card and action buttons", () => {
-    renderWithProviders(<ConversationWorkspace />);
+  it("renders active conversation with messages in the workspace", () => {
+    renderWithProviders(<ConversationWorkspace />, {
+      preloadedState: {
+        conversation: {
+          conversations: [
+            {
+              id: "active-conv",
+              title: "测试会话",
+              status: "active" as const,
+              is_pinned: false,
+              message_count: 2,
+              updated_at: "2026-06-09T00:00:00.000Z",
+            },
+          ],
+          activeConversationId: "active-conv",
+          messages: {
+            "active-conv": [
+              {
+                id: "msg-1",
+                role: "user" as const,
+                content: "你好，帮我分析一下数据",
+                created_at: "2026-06-09T00:00:00.000Z",
+              },
+              {
+                id: "msg-2",
+                role: "assistant" as const,
+                content: "好的，我来分析数据",
+                created_at: "2026-06-09T00:00:01.000Z",
+              },
+            ],
+          },
+          isLoading: false,
+          error: null,
+          meta_agent_state: {
+            current_layer: null,
+            layer_history: [],
+            triage_result: null,
+          },
+        },
+      },
+    });
 
-    expect(
-      screen.getByText((_, element) =>
-        Boolean(
-          element?.tagName.toLowerCase() === "p" &&
-            element.textContent?.startsWith(t("shell.prototypeAdvice")),
-        ),
-      ),
-    ).toHaveTextContent(/建议：建议主攻/);
-    expect(screen.getByText("部署监控代码(100%)")).toBeInTheDocument();
-    expect(screen.getByText("spider_probe_server.py")).toBeInTheDocument();
-    expect(screen.getByText(/任务执行完毕/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "查看备份" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "合并数据" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "存为模板" })).toBeInTheDocument();
+    expect(screen.getByText("你好，帮我分析一下数据")).toBeInTheDocument();
+    expect(screen.getByText("好的，我来分析数据")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入您的问题...")).toBeInTheDocument();
   });
 
   it("adds rapid user messages with unique ids to the normalized active conversation", () => {
@@ -126,6 +154,11 @@ describe("ConversationUI", () => {
             messages: {},
             isLoading: false,
             error: null,
+            meta_agent_state: {
+              current_layer: null,
+              layer_history: [],
+              triage_result: null,
+            },
           },
         },
       });

@@ -1,6 +1,10 @@
 """Sandbox Manager - Docker container lifecycle, AST static code analysis."""
 
 import ast
+import asyncio
+import io
+import tarfile
+import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
@@ -15,6 +19,9 @@ logger = structlog.get_logger(__name__)
 yaml_config = get_yaml_config()
 SANDBOX_CONFIG = yaml_config.get("sandbox", {})
 
+SANDBOX_CONTAINER = SANDBOX_CONFIG.get("container_name", "nexus-sandbox")
+SANDBOX_NETWORK = SANDBOX_CONFIG.get("network", "my-agent_default")
+SANDBOX_TIMEOUT = SANDBOX_CONFIG.get("timeout", 60)
 
 # --- Enums ---
 
@@ -41,7 +48,6 @@ class ASTAnalyzer:
     # Dangerous patterns that require user confirmation
     DANGEROUS_PATTERNS = {
         "os.system": "os.system() call",
-        "subprocess.": "subprocess execution",
         "subprocess.": "subprocess execution",
         "eval(": "eval() function call",
         "exec(": "exec() function call",
@@ -112,12 +118,10 @@ class _ASTSecurityWalker(ast.NodeVisitor):
 
     def __init__(self, findings: list[str]):
         self.findings = findings
-        self._in_functiondef = False
 
     def visit_Call(self, node):
         func_str = self._get_func_name(node)
 
-        # Check for dangerous calls
         if any(dangerous in func_str for dangerous in [
             "os.system", "os.popen", "os.exec",
         ]):
@@ -127,13 +131,12 @@ class _ASTSecurityWalker(ast.NodeVisitor):
         elif func_str in ("eval", "exec", "compile"):
             self.findings.append(f"[DANGEROUS] Dangerous function: {func_str}()")
         elif func_str == "__import__":
-            self.findings.append(f"[DANGEROUS] Dynamic import detected")
+            self.findings.append("[DANGEROUS] Dynamic import detected")
         elif "open" in func_str:
-            # Check if opening a sensitive path
             if node.args:
                 first_arg = ast.dump(node.args[0])
                 if any(sensitive in first_arg for sensitive in ["/etc", "/proc", "/sys", "~/.ssh"]):
-                    self.findings.append(f"[DANGEROUS] Attempting to open sensitive path")
+                    self.findings.append("[DANGEROUS] Attempting to open sensitive path")
                 else:
                     self.findings.append(f"[WARNING] File open: {func_str}")
         elif "socket" in func_str:
@@ -187,18 +190,45 @@ class ExecutionResult:
     artifacts: list[dict] = None
     duration_ms: int = 0
     error: Optional[str] = None
+    risk_level: Optional[str] = None
+    findings: list[str] = None
 
     def __post_init__(self):
         if self.artifacts is None:
             self.artifacts = []
+        if self.findings is None:
+            self.findings = []
 
 
 class SandboxManager:
-    """Manages Docker sandbox containers for code execution."""
+    """Manages Docker sandbox containers for code execution.
+
+    Executes user code inside the nexus-sandbox container via docker-py.
+    Falls back to mock execution when Docker is unavailable.
+    """
 
     def __init__(self):
         self._active_executions: dict[str, dict] = {}
         self.ast_analyzer = ASTAnalyzer()
+        self._docker_client: Optional["docker.DockerClient"] = None
+        self._docker_available: Optional[bool] = None
+
+    @property
+    def docker(self):
+        """Lazy-initialized Docker client. Returns None if unavailable."""
+        if self._docker_client is None and self._docker_available is not False:
+            try:
+                import docker as docker_mod
+                self._docker_client = docker_mod.from_env()
+                self._docker_client.ping()
+                self._docker_available = True
+                logger.info("Docker client connected")
+            except Exception as e:
+                self._docker_client = None
+                self._docker_available = False
+                logger.warning("Docker unavailable, sandbox will use mock execution",
+                               error=str(e))
+        return self._docker_client
 
     async def analyze_code(self, code: str) -> tuple[ExecutionRisk, list[str]]:
         """Perform AST security analysis on code."""
@@ -210,19 +240,25 @@ class SandboxManager:
         language: str = "python",
         timeout: Optional[int] = None,
         env_vars: Optional[dict] = None,
-        files: Optional[dict[str, str]] = None,  # filename -> content mapping
+        files: Optional[dict[str, str]] = None,
     ) -> ExecutionResult:
         """Execute code in a sandboxed Docker container.
 
-        Note: This is a mock implementation for testing.
-        Real Docker execution via docker-py goes live with Docker daemon available.
+        Steps:
+        1. AST security audit
+        2. If blocked → reject
+        3. Copy code into the sandbox container
+        4. Execute via `docker exec` inside the container
+        5. Capture stdout/stderr/exit_code/elapsed time
+
+        Falls back to mock execution if Docker is unavailable (dev/testing).
         """
         if timeout is None:
-            timeout = SANDBOX_CONFIG.get("timeout", 60)
+            timeout = SANDBOX_TIMEOUT
 
         execution_id = str(uuid.uuid4())
 
-        # AST analysis
+        # --- Step 1: AST audit ---
         risk, findings = await self.analyze_code(code)
         if risk == ExecutionRisk.BLOCKED:
             return ExecutionResult(
@@ -230,25 +266,201 @@ class SandboxManager:
                 status=SandboxStatus.ERROR,
                 stderr="\n".join(findings),
                 error="Code blocked by security analysis",
+                risk_level=risk.value,
+                findings=findings,
             )
 
-        # Mock execution result
+        # --- Step 2: Try real Docker execution ---
+        client = self.docker
+        if client is not None:
+            try:
+                result = await self._execute_in_container(
+                    client=client,
+                    execution_id=execution_id,
+                    code=code,
+                    timeout=timeout,
+                    risk=risk,
+                    findings=findings,
+                )
+                self._active_executions[execution_id] = {
+                    "result": result, "code": code, "risk": risk, "findings": findings,
+                }
+                return result
+            except Exception as e:
+                logger.warning(
+                    "Docker sandbox execution failed, falling back to mock",
+                    execution_id=execution_id,
+                    error=str(e),
+                )
+
+        # --- Fallback: mock execution (tests / no Docker) ---
+        return await self._execute_mock(
+            execution_id=execution_id,
+            code=code,
+            language=language,
+            timeout=timeout,
+            risk=risk,
+            findings=findings,
+        )
+
+    async def _execute_in_container(
+        self,
+        client: "docker.DockerClient",
+        execution_id: str,
+        code: str,
+        timeout: int,
+        risk: ExecutionRisk,
+        findings: list[str],
+    ) -> ExecutionResult:
+        """Execute code for real inside the nexus-sandbox container."""
+        loop = asyncio.get_event_loop()
+        start = time.monotonic()
+
+        # Ensure sandbox container is running
+        try:
+            container = client.containers.get(SANDBOX_CONTAINER)
+        except Exception:
+            return ExecutionResult(
+                execution_id=execution_id,
+                status=SandboxStatus.ERROR,
+                error=f"Sandbox container '{SANDBOX_CONTAINER}' not found. "
+                      "Run: docker compose up -d sandbox",
+                risk_level=risk.value,
+                findings=findings,
+            )
+
+        if container.status != "running":
+            try:
+                container.start()
+            except Exception as e:
+                return ExecutionResult(
+                    execution_id=execution_id,
+                    status=SandboxStatus.ERROR,
+                    error=f"Failed to start sandbox container: {e}",
+                    risk_level=risk.value,
+                    findings=findings,
+                )
+
+        # Write code to a temp file inside the container via tar archive
+        script_path = "/workspace"
+        script_name = f"_nexus_{execution_id[:8]}.py"
+        container_path = f"{script_path}/{script_name}"
+
+        tar_stream = io.BytesIO()
+        tf = tarfile.TarFile(fileobj=tar_stream, mode="w")
+        code_bytes = (code + "\n").encode("utf-8")
+        info = tarfile.TarInfo(name=script_name)
+        info.size = len(code_bytes)
+        info.mode = 0o644
+        tf.addfile(info, io.BytesIO(code_bytes))
+        tf.close()
+        tar_stream.seek(0)
+
+        try:
+            container.put_archive(script_path, tar_stream)
+        except Exception as e:
+            return ExecutionResult(
+                execution_id=execution_id,
+                status=SandboxStatus.ERROR,
+                error=f"Failed to upload code to sandbox: {e}",
+                risk_level=risk.value,
+                findings=findings,
+            )
+
+        # Execute the script inside the container
+        exec_cmd = ["python", container_path]
+        try:
+            exit_code, stdout = await loop.run_in_executor(
+                None,
+                lambda: container.exec_run(
+                    cmd=exec_cmd,
+                    user="sandbox",
+                    workdir="/workspace",
+                    environment={
+                        "PYTHONUNBUFFERED": "1",
+                        "NEXUS_EXECUTION_ID": execution_id,
+                    },
+                ),
+            )
+            # exec_run returns (exit_code, output) — output is bytes
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            stderr = ""  # exec_run combines stdout+stderr in the output
+        except Exception as e:
+            elapsed = int((time.monotonic() - start) * 1000)
+            return ExecutionResult(
+                execution_id=execution_id,
+                status=SandboxStatus.ERROR,
+                error=f"Sandbox execution failed: {e}",
+                duration_ms=elapsed,
+                risk_level=risk.value,
+                findings=findings,
+            )
+
+        # Cleanup the temp file
+        try:
+            container.exec_run(cmd=["rm", "-f", script_name], workdir="/workspace")
+        except Exception:
+            pass
+
+        elapsed = int((time.monotonic() - start) * 1000)
+
+        if exit_code is None:
+            exit_code = -1
+
+        status = SandboxStatus.COMPLETED if exit_code == 0 else SandboxStatus.ERROR
+
+        result = ExecutionResult(
+            execution_id=execution_id,
+            status=status,
+            stdout=stdout or "",
+            stderr=stderr or "",
+            exit_code=exit_code,
+            duration_ms=elapsed,
+            risk_level=risk.value,
+            findings=findings,
+        )
+
+        self._active_executions[execution_id] = {
+            "result": result,
+            "code": code,
+            "risk": risk,
+            "findings": findings,
+        }
+
+        return result
+
+    async def _execute_mock(
+        self,
+        execution_id: str,
+        code: str,
+        language: str,
+        timeout: int,
+        risk: ExecutionRisk,
+        findings: list[str],
+    ) -> ExecutionResult:
+        """Mock execution for development/testing when Docker is unavailable."""
         logger.info(
-            "Executing code in sandbox",
+            "Mock sandbox execution",
             execution_id=execution_id,
             code_length=len(code),
             language=language,
             risk=risk,
         )
 
-        # Simulate execution
         result = ExecutionResult(
             execution_id=execution_id,
             status=SandboxStatus.COMPLETED,
-            stdout=f"Mock execution output for {len(code)} chars of {language} code",
+            stdout=(
+                f"[sandbox mock] Executed {len(code)} chars of {language} code.\n"
+                f"Risk: {risk.value}\n"
+                f"Docker not available — run 'docker compose up -d sandbox' for real execution."
+            ),
             stderr="",
             exit_code=0,
-            duration_ms=150,
+            duration_ms=0,
+            risk_level=risk.value,
+            findings=findings,
         )
 
         self._active_executions[execution_id] = {
@@ -280,12 +492,15 @@ class SandboxManager:
     def get_sandbox_info(self) -> dict:
         """Get sandbox configuration info."""
         return {
+            "container_name": SANDBOX_CONTAINER,
+            "network": SANDBOX_NETWORK,
             "memory_limit": SANDBOX_CONFIG.get("memory_limit", "512m"),
             "cpu_limit": SANDBOX_CONFIG.get("cpu_limit", 1.0),
-            "timeout": SANDBOX_CONFIG.get("timeout", 60),
+            "timeout": SANDBOX_TIMEOUT,
             "network_enabled": SANDBOX_CONFIG.get("network_enabled", True),
             "preinstalled_libs": SANDBOX_CONFIG.get("preinstalled_libs", []),
             "active_executions": self.get_active_count(),
+            "docker_available": self._docker_available,
         }
 
 

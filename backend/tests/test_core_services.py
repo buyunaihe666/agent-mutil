@@ -410,9 +410,17 @@ def test_unregister_tool(t_registry):
 
 
 @pytest.mark.asyncio
-async def test_execute_tool(t_registry):
-    result = await t_registry.execute_tool("read_file", file_path="test.txt")
-    assert result.success is True
+async def test_execute_tool(t_registry, tmp_path):
+    # Create a real file in a temp dir and patch the config
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("hello", encoding="utf-8")
+    with patch(
+        "app.core.yaml_config.get_yaml_config",
+        return_value={"storage": {"local_path": str(tmp_path)}},
+    ):
+        result = await t_registry.execute_tool("read_file", file_path="test.txt")
+        assert result.success is True
+        assert result.data["content"] == "hello"
 
 
 @pytest.mark.asyncio
@@ -436,6 +444,522 @@ def test_audit_tool_category(t_registry):
     assert tools[0].name == "code_execution_audit"
 
 
+# --- DatabaseQueryTool Tests ---
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+@pytest.mark.asyncio
+async def test_query_tool_empty_query(t_registry):
+    """Empty query should be rejected."""
+    result = await t_registry.execute_tool("query_database", query="")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_insert(t_registry):
+    """INSERT statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="INSERT INTO users (name) VALUES ('test')")
+    assert result.success is False
+    assert "INSERT" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_update(t_registry):
+    """UPDATE statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="UPDATE users SET name = 'hacked' WHERE id = 1")
+    assert result.success is False
+    assert "UPDATE" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_delete(t_registry):
+    """DELETE statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="DELETE FROM users WHERE id = 1")
+    assert result.success is False
+    assert "DELETE" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_drop(t_registry):
+    """DROP statement should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="DROP TABLE users")
+    assert result.success is False
+    assert "DROP" in result.error
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_comment_injection(t_registry):
+    """Comment-based SQL injection should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="SELECT * FROM users WHERE name = 'admin' --'")
+    assert result.success is False
+    assert "injection" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_or_injection(t_registry):
+    """OR-based SQL injection should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="SELECT * FROM users WHERE name = 'x' OR '1'='1'")
+    assert result.success is False
+    assert "injection" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_reject_stacked_query(t_registry):
+    """Stacked query injection should be rejected."""
+    result = await t_registry.execute_tool("query_database",
+        query="SELECT * FROM users; DROP TABLE users")
+    assert result.success is False
+    # Caught by either injection patterns or write keyword check (DROP)
+    err = result.error.lower()
+    assert "injection" in err or "drop" in err or "select and with" in err.lower()
+
+
+@pytest.mark.asyncio
+async def test_query_tool_accept_valid_select(t_registry):
+    """Valid SELECT query should be accepted and executed."""
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.keys.return_value = ["id", "name"]
+    # Use a tuple so zip(columns, row) works naturally
+    mock_result.fetchall.return_value = [(1, "test")]
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.close = AsyncMock()
+
+    async def mock_get_db():
+        yield mock_session
+
+    with patch("app.core.tool_registry.get_db", side_effect=mock_get_db):
+        result = await t_registry.execute_tool("query_database",
+            query="SELECT id, name FROM users LIMIT 10")
+        assert result.success is True
+        assert result.data is not None
+        assert "columns" in result.data
+        assert result.data["columns"] == ["id", "name"]
+        assert len(result.data["rows"]) == 1
+        assert result.data["rows"][0] == {"id": 1, "name": "test"}
+
+
+@pytest.mark.asyncio
+async def test_query_tool_accept_cte(t_registry):
+    """WITH (CTE) query should be accepted."""
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.keys.return_value = ["count"]
+    mock_result.fetchall.return_value = []
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.close = AsyncMock()
+
+    async def mock_get_db():
+        yield mock_session
+
+    with patch("app.core.tool_registry.get_db", side_effect=mock_get_db):
+        result = await t_registry.execute_tool("query_database",
+            query="WITH active_users AS (SELECT * FROM users WHERE active = true) SELECT count(*) FROM active_users")
+        assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_query_tool_db_error_handling(t_registry):
+    """Database errors should be caught and returned gracefully."""
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(side_effect=Exception("Connection refused"))
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.close = AsyncMock()
+
+    async def mock_get_db():
+        yield mock_session
+
+    with patch("app.core.tool_registry.get_db", side_effect=mock_get_db):
+        result = await t_registry.execute_tool("query_database",
+            query="SELECT * FROM users")
+        assert result.success is False
+        assert "Connection refused" in result.error
+
+
+# --- FileReadTool Tests ---
+
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+
+class TestFileReadTool:
+    """Tests for FileReadTool with real file I/O."""
+
+    @pytest.fixture(autouse=True)
+    def setup_teardown(self):
+        """Create a temporary storage root for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.storage_root = Path(self.temp_dir.name).resolve()
+        # Patch storage.local_path to point to our temp dir
+        self._patch = patch(
+            "app.core.yaml_config.get_yaml_config",
+            return_value={"storage": {"local_path": str(self.storage_root)}},
+        )
+        self._patch.start()
+        yield
+        self._patch.stop()
+        self.temp_dir.cleanup()
+
+    def _create_file(self, rel_path: str, content: str = "hello world") -> Path:
+        """Helper: create a file under the temp storage root."""
+        full_path = self.storage_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+        return full_path
+
+    @pytest.mark.asyncio
+    async def test_file_read_empty_path(self, t_registry):
+        """Empty path should return error."""
+        result = await t_registry.execute_tool("read_file", file_path="")
+        assert result.success is False
+        assert "required" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_path_traversal_attack(self, t_registry):
+        """Path traversal attack (e.g. ../../../etc/passwd) should be rejected."""
+        result = await t_registry.execute_tool(
+            "read_file", file_path="../../../etc/passwd"
+        )
+        assert result.success is False
+        assert "outside" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_not_found(self, t_registry):
+        """Non-existent file should return error."""
+        result = await t_registry.execute_tool(
+            "read_file", file_path="nonexistent.txt"
+        )
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_directory_not_file(self, t_registry):
+        """Directory path should return error."""
+        subdir = self.storage_root / "subdir"
+        subdir.mkdir(exist_ok=True)
+        result = await t_registry.execute_tool("read_file", file_path="subdir")
+        assert result.success is False
+        assert "not a file" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_success(self, t_registry):
+        """Reading a valid text file should return its content."""
+        self._create_file("notes.txt", "Hello from NEXUS AI!")
+        result = await t_registry.execute_tool("read_file", file_path="notes.txt")
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["content"] == "Hello from NEXUS AI!"
+        assert result.data["size"] == 20
+        assert result.data["path"] == "notes.txt"
+
+    @pytest.mark.asyncio
+    async def test_file_read_too_large(self, t_registry):
+        """Files larger than 10MB should be rejected."""
+        big_path = self._create_file("big_file.txt", "x")
+        # Simulate a file larger than 10MB by patching stat
+        mock_stat = os.stat(str(big_path))
+        mock_stat_result = list(mock_stat)
+        # Set file size to 11MB
+        mock_stat_result[6] = 11 * 1024 * 1024
+        import stat as stat_module
+
+        class MockStatResult:
+            def __init__(self, values):
+                self._values = values
+
+            def __getattr__(self, name):
+                # map stat result tuple indices
+                mapping = {
+                    "st_mode": 0, "st_ino": 1, "st_dev": 2, "st_nlink": 3,
+                    "st_uid": 4, "st_gid": 5, "st_size": 6,
+                    "st_atime": 7, "st_mtime": 8, "st_ctime": 9,
+                }
+                if name in mapping:
+                    return self._values[mapping[name]]
+                raise AttributeError(name)
+
+        with patch.object(Path, "stat", return_value=MockStatResult(mock_stat_result)):
+            result = await t_registry.execute_tool("read_file", file_path="big_file.txt")
+            assert result.success is False
+            assert "too large" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_read_binary_file_metadata(self, t_registry):
+        """Binary files should return metadata only, not content."""
+        bin_path = self.storage_root / "image.bin"
+        bin_path.write_bytes(b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d")
+        result = await t_registry.execute_tool("read_file", file_path="image.bin")
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["content"] == "[binary file]"
+        assert result.data["size"] == 12
+        assert result.data["path"] == "image.bin"
+
+    @pytest.mark.asyncio
+    async def test_file_read_nested_subdirectory(self, t_registry):
+        """Files in nested subdirectories should be readable."""
+        self._create_file("a/b/c/deep.txt", "deep content")
+        result = await t_registry.execute_tool(
+            "read_file", file_path="a/b/c/deep.txt"
+        )
+        assert result.success is True
+        assert result.data["content"] == "deep content"
+
+
+# --- FileWriteTool Tests ---
+
+
+class TestFileWriteTool:
+    """Tests for FileWriteTool with real file I/O."""
+
+    @pytest.fixture(autouse=True)
+    def setup_teardown(self):
+        """Create a temporary storage root for each test."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.storage_root = Path(self.temp_dir.name).resolve()
+        self._patch = patch(
+            "app.core.yaml_config.get_yaml_config",
+            return_value={"storage": {"local_path": str(self.storage_root)}},
+        )
+        self._patch.start()
+        yield
+        self._patch.stop()
+        self.temp_dir.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_file_write_empty_name(self, t_registry):
+        """Empty file_name should return error."""
+        result = await t_registry.execute_tool(
+            "write_file", file_name="", content="some content"
+        )
+        assert result.success is False
+        assert "required" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_write_path_traversal_attack(self, t_registry):
+        """Path traversal attack should be rejected."""
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="../../../etc/malicious.txt",
+            content="evil",
+        )
+        assert result.success is False
+        assert "outside" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_file_write_success(self, t_registry):
+        """Successful write should return path and size info."""
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="report.txt",
+            content="Hello from FileWriteTool!",
+        )
+        assert result.success is True
+        assert result.data is not None
+        assert result.data["path"] == "report.txt"
+        assert result.data["chars"] == 25
+        assert result.data["size"] == 25
+
+        # Verify file was actually written to disk
+        written_path = self.storage_root / "report.txt"
+        assert written_path.exists()
+        assert written_path.read_text(encoding="utf-8") == "Hello from FileWriteTool!"
+
+    @pytest.mark.asyncio
+    async def test_file_write_creates_parent_dirs(self, t_registry):
+        """Write should create parent directories automatically."""
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="a/b/c/nested.txt",
+            content="deeply nested content",
+        )
+        assert result.success is True
+        assert result.data["path"] == "a/b/c/nested.txt"
+
+        # Verify directory was created
+        nested_dir = self.storage_root / "a" / "b" / "c"
+        assert nested_dir.exists()
+        assert nested_dir.is_dir()
+
+        # Verify file content
+        written_path = nested_dir / "nested.txt"
+        assert written_path.read_text(encoding="utf-8") == "deeply nested content"
+
+    @pytest.mark.asyncio
+    async def test_file_write_overwrite_existing(self, t_registry):
+        """Overwriting an existing file should succeed."""
+        # Create initial file
+        existing = self.storage_root / "notes.txt"
+        existing.parent.mkdir(parents=True, exist_ok=True)
+        existing.write_text("original content", encoding="utf-8")
+
+        # Overwrite it
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="notes.txt",
+            content="updated content",
+        )
+        assert result.success is True
+        assert result.data["chars"] == 15
+        assert existing.read_text(encoding="utf-8") == "updated content"
+
+    @pytest.mark.asyncio
+    async def test_file_write_special_characters(self, t_registry):
+        """Write with special characters (Chinese, emoji, newlines) should succeed."""
+        special_content = "你好 NEXUS!\nLine 2 🚀\n\tIndented\n{json: true}"
+        result = await t_registry.execute_tool(
+            "write_file",
+            file_name="special.txt",
+            content=special_content,
+        )
+        assert result.success is True
+        assert result.data["chars"] == len(special_content)
+
+        written_path = self.storage_root / "special.txt"
+        assert written_path.read_text(encoding="utf-8") == special_content
+
+
+# --- WebSearchTool Tests ---
+
+from unittest.mock import AsyncMock, patch
+import httpx
+
+
+@pytest.mark.asyncio
+async def test_web_search_empty_query(t_registry):
+    """Empty query should return error."""
+    result = await t_registry.execute_tool("web_search", query="")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_web_search_success(t_registry):
+    """Successful search should return results with title/url/snippet."""
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(return_value={
+        "AbstractText": "Python is a programming language.",
+        "AbstractURL": "https://en.wikipedia.org/wiki/Python",
+        "Heading": "Python (programming language)",
+        "RelatedTopics": [
+            {
+                "Text": "Python is widely used in data science.",
+                "FirstURL": "https://en.wikipedia.org/wiki/Python_(data_science)",
+            },
+            {
+                "Text": "Python supports multiple paradigms.",
+                "FirstURL": "https://en.wikipedia.org/wiki/Python_(programming_paradigm)",
+            },
+        ],
+    })
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("web_search", query="Python")
+
+    assert result.success is True
+    assert "Found" in result.output
+    assert "results" in result.data
+    assert len(result.data["results"]) >= 1
+    # First result should have all three fields
+    first = result.data["results"][0]
+    assert "title" in first
+    assert "url" in first
+    assert "snippet" in first
+
+
+@pytest.mark.asyncio
+async def test_web_search_no_results(t_registry):
+    """Empty results should still return success with empty list."""
+    mock_response = AsyncMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = MagicMock(return_value={
+        "AbstractText": "",
+        "RelatedTopics": [],
+    })
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_response)
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("web_search", query="xyznonexistent12345")
+
+    assert result.success is True
+    assert result.data["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_web_search_http_error(t_registry):
+    """HTTP errors should be handled gracefully."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    error_response = AsyncMock()
+    error_response.status_code = 500
+    mock_client.get = AsyncMock(side_effect=httpx.HTTPStatusError(
+        "Server error", request=AsyncMock(), response=error_response,
+    ))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("web_search", query="test")
+
+    assert result.success is False
+    assert "HTTP 500" in result.error
+
+
+@pytest.mark.asyncio
+async def test_web_search_timeout(t_registry):
+    """Timeout errors should be handled gracefully."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("Request timed out"))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("web_search", query="test")
+
+    assert result.success is False
+    assert "timed out" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_web_search_network_error(t_registry):
+    """General network errors should be handled gracefully."""
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(side_effect=Exception("Network unreachable"))
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        result = await t_registry.execute_tool("web_search", query="test")
+
+    assert result.success is False
+    assert "Network unreachable" in result.error
+
+
 # --- Sandbox Manager Tests (M7) ---
 
 from app.core.sandbox_manager import (
@@ -449,7 +973,11 @@ from app.core.sandbox_manager import (
 
 @pytest.fixture
 def sb_manager():
-    return SandboxManager()
+    mgr = SandboxManager()
+    # Force mock execution — tests must not depend on Docker availability
+    mgr._docker_available = False
+    mgr._docker_client = None
+    return mgr
 
 
 def test_ast_analyze_safe_code():
@@ -507,6 +1035,142 @@ def test_get_sandbox_info(sb_manager):
     assert "memory_limit" in info
     assert "cpu_limit" in info
     assert "timeout" in info
+
+
+# --- CodeExecutionTool Integration Tests (Task 2.5) ---
+
+from unittest.mock import AsyncMock, patch
+
+
+@pytest.mark.asyncio
+async def test_code_execution_empty_code(t_registry):
+    """Empty code should return an error."""
+    result = await t_registry.execute_tool("execute_code", code="")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_code_execution_whitespace_only(t_registry):
+    """Whitespace-only code should return an error."""
+    result = await t_registry.execute_tool("execute_code", code="   \n\t  ")
+    assert result.success is False
+    assert "empty" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_code_execution_blocked_by_ast(t_registry):
+    """Code with blocked patterns should be rejected with audit info."""
+    result = await t_registry.execute_tool("execute_code", code="import pty\npty.spawn('/bin/bash')")
+    assert result.success is False
+    assert "blocked" in result.error.lower()
+    assert result.data is not None
+    assert "audit_findings" in result.data
+    assert result.data["risk_level"] == "blocked"
+    assert len(result.data["audit_findings"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_code_execution_successful(t_registry):
+    """Valid code should execute successfully and return output."""
+    from app.core.sandbox_manager import SandboxStatus, ExecutionResult
+
+    mock_result = ExecutionResult(
+        execution_id="test-exec-001",
+        status=SandboxStatus.COMPLETED,
+        stdout="hello world\n",
+        stderr="",
+        exit_code=0,
+        duration_ms=120,
+    )
+
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ):
+        result = await t_registry.execute_tool("execute_code", code="print('hello world')")
+
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["stdout"] == "hello world\n"
+    assert result.data["stderr"] == ""
+    assert result.data["exit_code"] == 0
+    assert result.data["execution_time_ms"] > 0
+    assert result.data["risk_level"] == "safe"
+    assert "audit_findings" not in result.data  # Safe code — no audit findings in result
+
+
+@pytest.mark.asyncio
+async def test_code_execution_warning_code_still_runs(t_registry):
+    """Code with warning-level patterns should still execute (risk included in result)."""
+    from app.core.sandbox_manager import SandboxStatus, ExecutionResult
+
+    mock_result = ExecutionResult(
+        execution_id="test-exec-002",
+        status=SandboxStatus.COMPLETED,
+        stdout="File opened\n",
+        stderr="",
+        exit_code=0,
+        duration_ms=90,
+    )
+
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ):
+        result = await t_registry.execute_tool(
+            "execute_code",
+            code="with open('test.txt') as f:\n    print(f.read())",
+        )
+
+    assert result.success is True
+    assert result.data["risk_level"] in ("warning", "dangerous")
+    assert "audit_findings" in result.data
+
+
+@pytest.mark.asyncio
+async def test_code_execution_sandbox_error(t_registry):
+    """Sandbox execution failure should return a graceful error."""
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("Docker daemon not available"),
+    ):
+        result = await t_registry.execute_tool("execute_code", code="print('test')")
+
+    assert result.success is False
+    assert "sandbox execution error" in result.error.lower()
+    assert result.data is not None
+    assert "risk_level" in result.data
+
+
+@pytest.mark.asyncio
+async def test_code_execution_sandbox_nonzero_exit(t_registry):
+    """Code that runs but returns non-zero exit code should report failure."""
+    from app.core.sandbox_manager import SandboxStatus, ExecutionResult
+
+    mock_result = ExecutionResult(
+        execution_id="test-exec-003",
+        status=SandboxStatus.ERROR,
+        stdout="",
+        stderr="NameError: name 'foo' is not defined",
+        exit_code=1,
+        duration_ms=50,
+        error="NameError: name 'foo' is not defined",
+    )
+
+    with patch(
+        "app.core.sandbox_manager.sandbox_manager.execute",
+        new_callable=AsyncMock,
+        return_value=mock_result,
+    ):
+        result = await t_registry.execute_tool("execute_code", code="print(foo)")
+
+    assert result.success is False
+    assert result.data["exit_code"] == 1
+    assert "NameError" in result.data["stderr"]
 
 
 # --- RAG Engine Tests (M6) ---
@@ -709,6 +1373,200 @@ async def test_parallel_groups(orch_engine):
         available_agents=[],
     )
     assert len(plan.parallel_groups) >= 1
+
+
+@pytest.mark.asyncio
+async def test_execute_step_retry(orch_engine):
+    """Step should retry on transient failure up to step_retry_count times."""
+    from unittest.mock import AsyncMock, patch
+
+    plan = await orch_engine.create_plan(
+        title="Retry Test",
+        subtask_descriptions=["Step that fails transiently"],
+        available_agents=[{"id": "agent-1", "name": "Test Agent"}],
+    )
+    call_count = 0
+
+    async def mock_chat_completion(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise ConnectionError("Transient connection error")
+        from types import SimpleNamespace
+        return SimpleNamespace(content="Success after retry")
+
+    mock_agent_store = AsyncMock()
+    mock_agent_store.get_agent = AsyncMock(return_value={
+        "id": "agent-1", "name": "Test Agent", "system_prompt": "You are a test agent.",
+        "default_model": "test", "temperature": 0.5, "max_tokens": 1024,
+    })
+
+    with patch("app.core.agent_service.agent_store", mock_agent_store), \
+         patch("app.core.llm_gateway.chat_completion", side_effect=mock_chat_completion):
+        result = await orch_engine._execute_step(plan.plan_id, plan.subtasks[0].step_id)
+
+    assert result.status == StepStatus.COMPLETED
+    assert result.retry_count == 2  # Failed twice, succeeded on 3rd attempt
+    assert "Success after retry" in result.output
+
+
+@pytest.mark.asyncio
+async def test_execute_step_non_retryable(orch_engine):
+    """Step should NOT retry on non-retryable errors like ValueError."""
+    from unittest.mock import AsyncMock, patch
+
+    plan = await orch_engine.create_plan(
+        title="Non-Retryable Test",
+        subtask_descriptions=["Step with validation error"],
+        available_agents=[{"id": "agent-1", "name": "Test Agent"}],
+    )
+
+    async def mock_chat_completion(*args, **kwargs):
+        raise ValueError("Invalid input data")
+
+    mock_agent_store = AsyncMock()
+    mock_agent_store.get_agent = AsyncMock(return_value={
+        "id": "agent-1", "name": "Test Agent", "system_prompt": "You are a test agent.",
+        "default_model": "test", "temperature": 0.5, "max_tokens": 1024,
+    })
+
+    with patch("app.core.agent_service.agent_store", mock_agent_store), \
+         patch("app.core.llm_gateway.chat_completion", side_effect=mock_chat_completion):
+        result = await orch_engine._execute_step(plan.plan_id, plan.subtasks[0].step_id)
+
+    assert result.status == StepStatus.FAILED
+    assert result.retry_count == 0  # No retries for non-retryable error
+    assert "Invalid input data" in result.error
+
+
+@pytest.mark.asyncio
+async def test_pause_resume_during_execution(orch_engine):
+    """Plan should pause when requested and resume correctly.
+
+    Uses an agent with a mock slow LLM so pause can be triggered
+    between parallel groups.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    # Build subtasks explicitly with separate parallel groups
+    from app.core.orchestration_engine import SubTask, DependencyType
+    s1 = SubTask(description="Step A", assigned_agent_id="agent-delay", assigned_agent_name="Slow Agent")
+    s2 = SubTask(description="Step B", assigned_agent_id="agent-delay", assigned_agent_name="Slow Agent",
+                  dependencies=[s1.step_id], dependency_type=DependencyType.SEQUENTIAL)
+
+    plan = await orch_engine.create_plan(
+        title="Pause Test",
+        subtask_descriptions=[],  # Not used when subtasks provided
+        available_agents=[],
+        subtasks=[s1, s2],
+    )
+    # Verify two separate parallel groups
+    assert len(plan.parallel_groups) == 2, f"Expected 2 groups, got {len(plan.parallel_groups)}"
+
+    async def slow_completion(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        from types import SimpleNamespace
+        return SimpleNamespace(content="Done")
+
+    mock_agent_store = AsyncMock()
+    mock_agent_store.get_agent = AsyncMock(return_value={
+        "id": "agent-delay", "name": "Slow Agent", "system_prompt": "You are a test agent.",
+        "default_model": "test", "temperature": 0.5, "max_tokens": 1024,
+    })
+
+    async def run_plan():
+        return await orch_engine.execute_plan(plan.plan_id)
+
+    with patch("app.core.agent_service.agent_store", mock_agent_store), \
+         patch("app.core.llm_gateway.chat_completion", side_effect=slow_completion):
+        bg_task = asyncio.create_task(run_plan())
+
+        # Give it a moment to start executing the first group
+        await asyncio.sleep(0.1)
+
+        # Pause should succeed during RUNNING
+        paused = await orch_engine.pause(plan.plan_id)
+        assert paused is True, f"pause returned False, status={orch_engine.get_status(plan.plan_id)}"
+        assert orch_engine.get_status(plan.plan_id) == TaskStatus.PAUSED
+
+        # Resume
+        resumed = await orch_engine.resume(plan.plan_id)
+        assert resumed is True
+        assert orch_engine.get_status(plan.plan_id) == TaskStatus.RUNNING
+
+        # Wait for completion
+        results = await bg_task
+
+    assert len(results) == 2
+    assert orch_engine.get_status(plan.plan_id) == TaskStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_execution(orch_engine):
+    """Cancel should stop plan execution and skip remaining steps."""
+    plan = await orch_engine.create_plan(
+        title="Cancel Test",
+        subtask_descriptions=["Step A", "Step B"],
+        available_agents=[],
+    )
+
+    cancel_called = False
+
+    async def run_plan():
+        return await orch_engine.execute_plan(plan.plan_id)
+
+    bg_task = asyncio.create_task(run_plan())
+    await asyncio.sleep(0.05)
+
+    cancelled = await orch_engine.cancel(plan.plan_id)
+    assert cancelled is True
+    assert orch_engine.get_status(plan.plan_id) == TaskStatus.CANCELLED
+
+    results = await bg_task
+    # All steps should be either completed or skipped
+    assert orch_engine.get_status(plan.plan_id) == TaskStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_step_event_callback(orch_engine):
+    """Engine should emit correct events through callback during execution."""
+    events = []
+
+    async def track_events(event_type: str, plan_id: str, data: dict | None):
+        events.append({"type": event_type, "plan_id": plan_id, "data": data})
+
+    plan = await orch_engine.create_plan(
+        title="Event Test",
+        subtask_descriptions=["Step 1"],
+        available_agents=[],
+    )
+
+    results = await orch_engine.execute_plan(plan.plan_id, on_event=track_events)
+
+    assert len(results) == 1
+    event_types = [e["type"] for e in events]
+    assert "step_started" in event_types
+    assert "step_completed" in event_types
+    assert "plan_completed" in event_types
+
+
+@pytest.mark.asyncio
+async def test_compute_parallel_groups_topological(orch_engine):
+    """Parallel groups should respect explicit dependency step_ids."""
+    from app.core.orchestration_engine import SubTask, DependencyType
+
+    s1 = SubTask(description="Independent A")
+    s2 = SubTask(description="Depends on A", dependencies=[s1.step_id],
+                  dependency_type=DependencyType.SEQUENTIAL)
+    s3 = SubTask(description="Independent B")
+
+    groups = orch_engine._compute_parallel_groups([s1, s2, s3])
+
+    # s1 and s3 should be in first group (no deps), s2 in second group
+    assert len(groups) == 2
+    assert s1.step_id in groups[0]
+    assert s3.step_id in groups[0]
+    assert s2.step_id in groups[1]
 
 
 # --- Monitor Service Tests (M10) ---
